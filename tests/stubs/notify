@@ -1,3 +1,0 @@
-#!/usr/bin/env bash
-# Test double for Unraid's notify script.
-printf 'notify %s\n' "$*" >>"${STUB_LOG:?}"

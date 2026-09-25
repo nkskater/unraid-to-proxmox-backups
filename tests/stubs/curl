@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Test double for curl: records the arguments; exits with $STUB_CURL_EXIT.
+printf 'curl %s\n' "$*" >>"${STUB_LOG:?}"
+[[ " $* " == *" @- "* ]] && cat >/dev/null
+exit "${STUB_CURL_EXIT:-0}"

@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Test double for proxmox-backup-manager. With STUB_PBM_EXISTING=1, every
+# object pbs-setup.sh looks for already exists.
+printf 'pbm %s\n' "$*" >>"${STUB_LOG:?}"
+existing=${STUB_PBM_EXISTING:-}
+case "$1 $2" in
+  "datastore list") [[ -n $existing ]] && echo '[{"name": "unraid", "path": "/mnt/ds"}]' || echo '[]' ;;
+  "user list") [[ -n $existing ]] && echo '[{"userid":"unraid-backup@pbs"}]' || echo '[{"userid":"root@pam"}]' ;;
+  "user list-tokens") [[ -n $existing ]] && echo '[{"tokenid":"unraid-backup@pbs!unraid"}]' || echo '[]' ;;
+  "prune-job list") [[ -n $existing ]] && echo '[{"id":"unraid-retention"}]' || echo '[]' ;;
+  "verify-job list") [[ -n $existing ]] && echo '[{"id":"unraid-verify"}]' || echo '[]' ;;
+  "user generate-token")
+    printf 'Result: {\n  "tokenid": "%s!%s",\n  "value": "0123-abcd-secret"\n}\n' "$3" "$4"
+    ;;
+  "cert info") printf 'Subject: CN=pbs\nFingerprint (sha256): 64:d3:ff:3a\nPublic key type: rsa\n' ;;
+esac
+exit 0

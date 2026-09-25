@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Prepare a Proxmox Backup Server to receive the Unraid backups.
-#
-# Run as root on the PBS host. Safe to re-run: existing objects are kept and
-# the schedules and retention are updated to the values below.
+# Prepare this Proxmox Backup Server for upb. Run as root on the PBS VM.
+# Safe to re-run: existing objects are kept, and schedules and retention are
+# updated to the values below.
 #
 #   DATASTORE_PATH=/mnt/datastore/unraid ./pbs-setup.sh
 #
 # Creates: a datastore (if DATASTORE_PATH is set), a user with an API token
-# that may only *add* backups (no delete or prune, so a compromised Unraid box
-# can't wipe its backups), plus prune, verify and garbage-collection schedules.
+# that may only *add* backups (no delete or prune), plus prune, verify and
+# garbage-collection schedules. The token secret and the certificate
+# fingerprint are written straight into upb's config.
 set -euo pipefail
 
 DATASTORE="${DATASTORE:-unraid}"
@@ -16,17 +16,19 @@ DATASTORE_PATH="${DATASTORE_PATH:-}"
 NAMESPACE="${NAMESPACE:-}"
 PBS_USER="${PBS_USER:-unraid-backup@pbs}"
 TOKEN_NAME="${TOKEN_NAME:-unraid}"
+UPB_CONF="${UPB_CONF:-/etc/upb/upb.conf}"
+TOKEN_FILE="${TOKEN_FILE:-/etc/upb/secrets/pbs-token}"
 
-# Retention, applied by PBS on its own schedule (backups run at night on Unraid).
-PRUNE_SCHEDULE="${PRUNE_SCHEDULE:-06:00}"
+# Retention, applied by PBS after the nightly backup (upb runs at 05:00).
+PRUNE_SCHEDULE="${PRUNE_SCHEDULE:-08:00}"
 KEEP_LAST="${KEEP_LAST:-3}"
 KEEP_DAILY="${KEEP_DAILY:-14}"
 KEEP_WEEKLY="${KEEP_WEEKLY:-8}"
 KEEP_MONTHLY="${KEEP_MONTHLY:-12}"
 KEEP_YEARLY="${KEEP_YEARLY:-3}"
-GC_SCHEDULE="${GC_SCHEDULE:-07:00}"
+GC_SCHEDULE="${GC_SCHEDULE:-09:00}"
 # Re-read and checksum every snapshot older than VERIFY_OUTDATED_DAYS.
-VERIFY_SCHEDULE="${VERIFY_SCHEDULE:-sat 08:00}"
+VERIFY_SCHEDULE="${VERIFY_SCHEDULE:-sat 10:00}"
 VERIFY_OUTDATED_DAYS="${VERIFY_OUTDATED_DAYS:-30}"
 
 TOKEN_ID="$PBS_USER!$TOKEN_NAME"
@@ -41,14 +43,13 @@ die() {
 }
 pbm() { proxmox-backup-manager "$@"; }
 
-# json_has <json> <key> <value> — true if the (compact) JSON contains "key":"value".
+# json_has <json> <key> <value> — true if the JSON contains "key":"value".
 json_has() {
   local compact=${1//[[:space:]]/}
   [[ $compact == *"\"$2\":\"$3\""* ]]
 }
 
-command -v proxmox-backup-manager >/dev/null || die "run this on the Proxmox Backup Server host"
-[[ $EUID -eq 0 ]] || die "run as root"
+command -v proxmox-backup-manager >/dev/null || die "run this on the Proxmox Backup Server"
 
 say "Datastore '$DATASTORE'"
 if json_has "$(pbm datastore list --output-format json)" name "$DATASTORE"; then
@@ -77,13 +78,24 @@ fi
 
 say "API token '$TOKEN_ID'"
 if json_has "$(pbm user list-tokens "$PBS_USER" --output-format json)" tokenid "$TOKEN_ID"; then
-  echo "exists (its secret was shown when it was created; to issue a new one run"
-  echo "  proxmox-backup-manager user delete-token $PBS_USER $TOKEN_NAME"
-  echo "and re-run this script)"
+  echo "exists (to issue a new secret: proxmox-backup-manager user delete-token $PBS_USER $TOKEN_NAME,"
+  echo "then re-run this script)"
 else
-  echo "Copy the secret ('value') into /boot/config/upb/secrets/pbs-token on Unraid."
-  echo "It is shown only once:"
-  pbm user generate-token "$PBS_USER" "$TOKEN_NAME"
+  output=$(pbm user generate-token "$PBS_USER" "$TOKEN_NAME")
+  secret=$(sed -nE 's/.*"value"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' <<<"$output" | head -n 1)
+  if [[ -n $secret ]]; then
+    mkdir -p "$(dirname "$TOKEN_FILE")"
+    chmod 700 "$(dirname "$TOKEN_FILE")"
+    (
+      umask 077
+      printf '%s\n' "$secret" >"$TOKEN_FILE"
+    )
+    echo "created; secret saved to $TOKEN_FILE"
+  else
+    echo "$output"
+    echo "Could not read the secret from the output above. Save its 'value' to $TOKEN_FILE"
+    echo "now: it is shown only once."
+  fi
 fi
 
 say "Permissions on $ACL_PATH"
@@ -117,14 +129,18 @@ else
 fi
 echo "$VERIFY_SCHEDULE, re-verifying snapshots after $VERIFY_OUTDATED_DAYS days"
 
+say "upb config"
 fingerprint=$(pbm cert info | awk -F': ' '/[Ff]ingerprint/ { print $2; exit }')
-address=$(hostname -I | awk '{ print $1 }')
+if [[ -f $UPB_CONF ]] && grep -q '^PBS_FINGERPRINT=""' "$UPB_CONF"; then
+  sed -i "s/^PBS_FINGERPRINT=\"\"/PBS_FINGERPRINT=\"$fingerprint\"/" "$UPB_CONF"
+  echo "wrote PBS_FINGERPRINT to $UPB_CONF"
+fi
 
 cat <<EOF
 
-Done. Put these values in /boot/config/upb/upb.conf on Unraid:
+Done. $UPB_CONF should contain:
 
-  PBS_SERVER="$address"
+  PBS_SERVER="localhost"
   PBS_DATASTORE="$DATASTORE"
   PBS_NAMESPACE="$NAMESPACE"
   PBS_AUTH_ID="$TOKEN_ID"

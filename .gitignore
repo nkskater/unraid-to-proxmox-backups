@@ -1,4 +1,4 @@
-# Real config and secrets live on the Unraid flash drive, never in git.
+# Real config and secrets live in /etc/upb on the PBS VM, never in git.
 *.key
 *.token
 secrets/

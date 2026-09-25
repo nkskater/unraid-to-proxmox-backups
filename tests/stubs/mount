@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Test double for `mount -t nfs -o OPTS HOST:PATH MOUNTPOINT`. "Mounts" by
+# copying $STUB_EXPORTS/PATH into the mount point and recording it in
+# $STUB_MOUNTS. Paths listed in $STUB_MOUNT_FAIL fail to mount; paths in
+# $STUB_MOUNT_SILENT report success without mounting anything.
+printf 'mount %s\n' "$*" >>"${STUB_LOG:?}"
+source=${*: -2:1}
+mnt=${*: -1}
+path=${source#*:}
+[[ " ${STUB_MOUNT_FAIL:-} " == *" $path "* ]] && exit 32
+[[ " ${STUB_MOUNT_SILENT:-} " == *" $path "* ]] && exit 0
+[[ -d $STUB_EXPORTS$path ]] || exit 32
+cp -a "$STUB_EXPORTS$path/." "$mnt/"
+echo "$mnt" >>"${STUB_MOUNTS:?}"

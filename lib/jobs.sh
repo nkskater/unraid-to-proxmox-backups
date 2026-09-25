@@ -1,9 +1,9 @@
 # shellcheck shell=bash
 # Backup jobs: discovery, loading, validation and execution.
 #
-# A job is a bash file in $UPB_CONFIG_DIR/jobs.d/NN-name.conf. Each job becomes
-# one backup group on PBS (host/<BACKUP_ID_PREFIX>-<name>), and each entry in
-# SOURCES becomes one archive inside that group's snapshots.
+# A job is a bash file in $UPB_CONFIG_DIR/jobs.d/NN-name.conf naming one
+# Unraid folder (EXPORT). Each job becomes one backup group on PBS
+# (host/<BACKUP_ID_PREFIX>-<name>) whose snapshots hold one archive, <name>.pxar.
 
 ARCHIVE_NAME_RE='^[A-Za-z0-9_-]+$'
 BACKUP_ID_RE='^[A-Za-z0-9_][A-Za-z0-9._-]*$'
@@ -16,7 +16,7 @@ job_files() {
   return 0
 }
 
-# 30-appdata.conf -> appdata
+# 10-appdata-backup.conf -> appdata-backup
 job_name() {
   local base
   base=$(basename "$1" .conf)
@@ -36,26 +36,23 @@ find_job_file() {
 }
 
 # Loads a job into the current shell. Call it in a subshell so jobs can't
-# leak variables or hook functions into each other.
+# leak settings into each other.
 # shellcheck disable=SC2034  # job settings are read by run_job and the commands
 load_job() {
   JOB_ENABLED=true
-  JOB_DESCRIPTION=""
-  BACKUP_ID=""
-  SOURCES=()
+  EXPORT=""
   EXCLUDES=()
-  STOP_CONTAINERS=()
-  pre_backup() { :; }
-  post_backup() { :; }
+  WAIT_FOR_QUIET=false
+  BACKUP_ID=""
 
   JOB_NAME=$(job_name "$1")
-  JOB_DUMP_DIR="$STAGING_DIR/$JOB_NAME"
   # shellcheck source=/dev/null
   if ! source "$1"; then
     error "[$JOB_NAME] failed to load $1"
     return 1
   fi
   BACKUP_ID=${BACKUP_ID:-${BACKUP_ID_PREFIX:+$BACKUP_ID_PREFIX-}$JOB_NAME}
+  JOB_MOUNT="$MOUNT_ROOT/$JOB_NAME"
 }
 
 job_enabled() {
@@ -73,107 +70,58 @@ job_backup_id() {
 }
 
 validate_job() {
-  local spec name path rc=0
-  local -A seen=()
-  if [[ ! $JOB_NAME =~ $BACKUP_ID_RE ]]; then
-    error "[$JOB_NAME] job file name may only contain letters, digits, '.', '_' and '-'"
+  local rc=0
+  if [[ ! $JOB_NAME =~ $ARCHIVE_NAME_RE ]]; then
+    error "[$JOB_NAME] job names (from the file name) may only contain letters, digits, '_' and '-'"
     rc=1
   fi
   if [[ ! $BACKUP_ID =~ $BACKUP_ID_RE ]]; then
     error "[$JOB_NAME] invalid BACKUP_ID '$BACKUP_ID'"
     rc=1
   fi
-  for spec in "${SOURCES[@]}"; do
-    if [[ $spec != *:/* ]]; then
-      error "[$JOB_NAME] source '$spec' must look like 'name:/absolute/path'"
+  if [[ $EXPORT != /?* ]]; then
+    error "[$JOB_NAME] EXPORT must be the absolute Unraid path of the folder, e.g. /mnt/user/photos"
+    rc=1
+  fi
+  case $WAIT_FOR_QUIET in
+    true | false) ;;
+    *)
+      error "[$JOB_NAME] WAIT_FOR_QUIET must be true or false"
       rc=1
-      continue
-    fi
-    name=${spec%%:*}
-    path=${spec#*:}
-    if [[ ! $name =~ $ARCHIVE_NAME_RE ]]; then
-      error "[$JOB_NAME] archive name '$name' may only contain letters, digits, '_' and '-'"
-      rc=1
-    elif [[ $name == dumps ]]; then
-      error "[$JOB_NAME] archive name 'dumps' is reserved for database dumps"
-      rc=1
-    elif [[ -n ${seen[$name]:-} ]]; then
-      error "[$JOB_NAME] archive name '$name' is used twice"
-      rc=1
-    fi
-    seen[$name]=1
-    if [[ ! -d $path ]]; then
-      error "[$JOB_NAME] source directory does not exist: $path"
-      rc=1
-    fi
-  done
+      ;;
+  esac
   return "$rc"
 }
 
-# Runs one job: pre_backup hook, stop containers, back up, restart containers,
-# post_backup hook.
-#
-# Must run in its own subshell (it sources the job file and sets traps), and
-# must not be called from an if/&&/|| context, or bash ignores the `set -e`
-# that makes a failing command inside a hook fail the hook.
+# Runs one job: mount the export read-only, optionally wait for writes to
+# settle, back it up, unmount. Call it in its own subshell: it sources the job
+# file and sets traps.
 run_job() {
-  local rc hook_rc spec
-  local -a specs=()
+  local rc
   load_job "$1" || return 1
   validate_job || return 1
 
-  trap 'restart_stopped_containers' EXIT
+  trap 'unmount_export "$JOB_MOUNT"' EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
 
-  if ! dry_run && ! mkdir -p "$JOB_DUMP_DIR"; then
-    error "[$JOB_NAME] cannot create staging directory $JOB_DUMP_DIR"
-    return 1
+  mount_export "$EXPORT" "$JOB_MOUNT" || return 1
+  if [[ $WAIT_FOR_QUIET == true ]]; then
+    wait_for_quiet "$JOB_MOUNT" || return 1
   fi
 
-  (
-    set -e
-    pre_backup
-  )
-  hook_rc=$?
-  if ((hook_rc != 0)); then
-    error "[$JOB_NAME] pre_backup failed (exit $hook_rc), skipping backup"
-    return "$hook_rc"
-  fi
-
-  for spec in "${SOURCES[@]}"; do
-    specs+=("${spec%%:*}.pxar:${spec#*:}")
-  done
-  if [[ -d $JOB_DUMP_DIR && -n $(find "$JOB_DUMP_DIR" -mindepth 1 -print -quit) ]]; then
-    specs+=("dumps.pxar:$JOB_DUMP_DIR")
-  fi
-  # From here on post_backup always runs, so hooks can undo what pre_backup did.
-  if ((${#specs[@]} == 0)) && dry_run; then
-    info "[$JOB_NAME] [dry-run] nothing to back up yet (no SOURCES; dumps are only written by a real run)"
-    rc=0
-  elif ((${#specs[@]} == 0)); then
-    error "[$JOB_NAME] nothing to back up: no SOURCES and pre_backup wrote no dumps"
-    rc=1
-  elif ! stop_containers "${STOP_CONTAINERS[@]}"; then
-    error "[$JOB_NAME] could not stop containers, skipping backup"
-    rc=1
-  else
-    info "[$JOB_NAME] backing up ${#specs[@]} archive(s) to host/$BACKUP_ID"
-    pbs_backup "$BACKUP_ID" "${specs[@]}"
-    rc=$?
-    ((rc == 0)) || error "[$JOB_NAME] proxmox-backup-client failed (exit $rc)"
-  fi
-
-  restart_stopped_containers || rc=1
-
-  (
-    set -e
-    post_backup "$rc"
-  )
-  hook_rc=$?
-  if ((hook_rc != 0)); then
-    error "[$JOB_NAME] post_backup failed (exit $hook_rc)"
-    ((rc == 0)) && rc=$hook_rc
-  fi
+  info "[$JOB_NAME] backing up $UNRAID_HOST:$EXPORT to host/$BACKUP_ID"
+  pbs_backup "$BACKUP_ID" "$JOB_NAME.pxar:$JOB_MOUNT"
+  rc=$?
+  ((rc == 0)) || error "[$JOB_NAME] proxmox-backup-client failed (exit $rc)"
+  unmount_export "$JOB_MOUNT"
   return "$rc"
+}
+
+# Mounts a job's export to prove it is reachable and non-empty. Call in a subshell.
+check_job() {
+  load_job "$1" || return 1
+  validate_job || return 1
+  trap 'unmount_export "$JOB_MOUNT"' EXIT
+  mount_export "$EXPORT" "$JOB_MOUNT"
 }

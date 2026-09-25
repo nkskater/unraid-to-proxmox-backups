@@ -1,0 +1,12 @@
+# Output of the Appdata Backup plugin: one archive per container (taken with
+# the container stopped, so databases are consistent) and, if enabled in the
+# plugin, the flash drive.
+#
+# Set EXPORT to the plugin's destination folder (Settings > Appdata Backup).
+# The share it lives in must be exported to this VM (docs/unraid-setup.md).
+JOB_ENABLED=true
+EXPORT="/mnt/user/backups/appdata"
+
+# The plugin writes for a while each night. Wait until it has finished, so a
+# half-written archive is never captured.
+WAIT_FOR_QUIET=true

@@ -1,0 +1,12 @@
+[Unit]
+Description=Nightly pull of Unraid shares into Proxmox Backup Server (upb)
+
+[Timer]
+# Pick a time after Appdata Backup usually finishes on Unraid. Jobs with
+# WAIT_FOR_QUIET=true also wait for it if it runs late.
+OnCalendar=*-*-* 05:00
+# Run at boot if the VM was off at the scheduled time.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,12 +1,24 @@
 # shellcheck shell=bash
-# Notifications: Unraid's notification system and healthchecks.io-style pings.
+# Notifications: email (this host's sendmail), ntfy, and healthchecks.io-style pings.
 
-# notify_unraid <normal|warning|alert> <subject> <description> [message]
-notify_unraid() {
-  [[ $NOTIFY_UNRAID == true && -x $UNRAID_NOTIFY_CMD ]] || return 0
-  local -a args=(-e "Unraid to Proxmox backup" -i "$1" -s "$2" -d "$3")
-  [[ -n ${4:-} ]] && args+=(-m "$4")
-  "$UNRAID_NOTIFY_CMD" "${args[@]}" >/dev/null 2>&1 || warn "sending the Unraid notification failed"
+# notify <failure|success> <subject> <body>
+notify() {
+  local kind=$1 subject=$2 body=$3
+  if [[ -n $NOTIFY_EMAIL ]]; then
+    if command -v "$SENDMAIL_CMD" >/dev/null; then
+      printf 'To: %s\nSubject: %s\nContent-Type: text/plain; charset=UTF-8\n\n%s\n' \
+        "$NOTIFY_EMAIL" "$subject" "$body" | "$SENDMAIL_CMD" -t || warn "sending the email failed"
+    else
+      warn "NOTIFY_EMAIL is set but $SENDMAIL_CMD was not found"
+    fi
+  fi
+  if [[ -n $NOTIFY_NTFY_URL ]]; then
+    local priority=default
+    [[ $kind == failure ]] && priority=high
+    curl -fsS -m 15 --retry 3 -o /dev/null -H "Title: $subject" -H "Priority: $priority" \
+      --data-binary "$body" "$NOTIFY_NTFY_URL" || warn "sending the ntfy notification failed"
+  fi
+  return 0
 }
 
 # healthcheck_ping [start|fail] [log-file] — the log tail is sent as the ping body.

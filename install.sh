@@ -1,12 +1,13 @@
 #!/bin/bash
-# Install or update upb on an Unraid server. Run as root from a copy of this
-# repository. Safe to re-run: existing config and job files are never touched.
+# Install or update upb on the Proxmox Backup Server VM. Run as root from a
+# copy of this repository. Safe to re-run: existing config and job files are
+# never touched.
 set -euo pipefail
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG_DIR="${UPB_CONFIG_DIR:-/boot/config/upb}"
-APP_DIR="$CONFIG_DIR/app"
-USER_SCRIPTS_DIR="/boot/config/plugins/user.scripts/scripts"
+APP_DIR="${UPB_APP_DIR:-/opt/upb}"
+CONFIG_DIR="${UPB_CONFIG_DIR:-/etc/upb}"
+SYSTEMD_DIR="${UPB_SYSTEMD_DIR:-/etc/systemd/system}"
 
 say() { printf '==> %s\n' "$*"; }
 die() {
@@ -16,23 +17,31 @@ die() {
 
 [[ $EUID -eq 0 ]] || die "run as root"
 [[ -f $SRC/bin/upb ]] || die "run install.sh from the repository folder"
-[[ -d /boot/config || -n ${UPB_CONFIG_DIR:-} ]] || die "/boot/config not found; is this Unraid?"
+command -v proxmox-backup-client >/dev/null ||
+  die "proxmox-backup-client not found; run this on the Proxmox Backup Server"
+
+if ! command -v mount.nfs >/dev/null; then
+  say "Installing nfs-common"
+  apt-get update -q
+  apt-get install -y -q nfs-common
+fi
 
 say "Installing upb $(cat "$SRC/VERSION") to $APP_DIR"
-mkdir -p "$CONFIG_DIR/jobs.d" "$CONFIG_DIR/secrets" "$CONFIG_DIR/bin"
 rm -rf "$APP_DIR.new"
 mkdir -p "$APP_DIR.new"
 cp -r "$SRC/bin" "$SRC/lib" "$SRC/VERSION" "$APP_DIR.new/"
 rm -rf "$APP_DIR"
 mv "$APP_DIR.new" "$APP_DIR"
+ln -sf "$APP_DIR/bin/upb" /usr/local/bin/upb
 
+mkdir -p "$CONFIG_DIR/jobs.d" "$CONFIG_DIR/secrets"
+chmod 700 "$CONFIG_DIR/secrets"
 if [[ -e $CONFIG_DIR/upb.conf ]]; then
   say "Keeping existing $CONFIG_DIR/upb.conf"
 else
   cp "$SRC/config/upb.conf.example" "$CONFIG_DIR/upb.conf"
   say "Created $CONFIG_DIR/upb.conf"
 fi
-
 for example in "$SRC"/config/jobs.d/*.conf.example; do
   target="$CONFIG_DIR/jobs.d/$(basename "$example" .example)"
   if [[ ! -e $target ]]; then
@@ -41,35 +50,16 @@ for example in "$SRC"/config/jobs.d/*.conf.example; do
   fi
 done
 
-# The flash drive is mounted without exec permission, so the command is a
-# small wrapper in RAM. It disappears on reboot; the scheduled User Script
-# recreates it on every run.
-printf '#!/bin/bash\nexec bash %q "$@"\n' "$APP_DIR/bin/upb" >/usr/local/bin/upb
-chmod 0755 /usr/local/bin/upb
-say "Installed /usr/local/bin/upb"
-
-if [[ -d $(dirname "$USER_SCRIPTS_DIR") ]]; then
-  mkdir -p "$USER_SCRIPTS_DIR/upb-backup"
-  cp "$SRC/unraid/user-scripts/upb-backup/script" "$USER_SCRIPTS_DIR/upb-backup/script"
-  echo "Back up important data to Proxmox Backup Server (upb)" >"$USER_SCRIPTS_DIR/upb-backup/description"
-  say "Installed the 'upb-backup' User Script (set its schedule in Settings > User Scripts)"
-else
-  say "User Scripts plugin not found: install it from Community Applications to schedule backups"
-fi
-
-if [[ ! -f $CONFIG_DIR/bin/proxmox-backup-client ]]; then
-  say "Downloading proxmox-backup-client"
-  bash "$APP_DIR/bin/upb" install-client ||
-    say "Client download failed; run 'upb install-client' later (see docs/unraid-setup.md)"
-fi
+install -m 0644 "$SRC/systemd/upb-backup.service" "$SRC/systemd/upb-backup.timer" "$SYSTEMD_DIR/"
+systemctl daemon-reload
+say "Installed the upb-backup service and timer (not enabled yet)"
 
 cat <<EOF
 
 Next steps:
-  1. Edit $CONFIG_DIR/upb.conf (PBS server, datastore, token id, fingerprint)
-  2. Put the API token secret in $CONFIG_DIR/secrets/pbs-token
-  3. Review the jobs in $CONFIG_DIR/jobs.d/
-  4. upb init-key          # create the encryption key and store a copy offline
-  5. upb check             # verify config, jobs and the connection
-  6. upb backup --dry-run  # then: upb backup
+  1. ./proxmox/pbs-setup.sh         # datastore, backup-only token, schedules
+  2. Edit $CONFIG_DIR/upb.conf and the jobs in $CONFIG_DIR/jobs.d/
+  3. upb check                      # config, PBS, and every NFS export
+  4. upb backup                     # first run
+  5. systemctl enable --now upb-backup.timer
 EOF

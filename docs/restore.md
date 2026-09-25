@@ -1,112 +1,96 @@
 # Restoring
 
-## Before you need it
-
-Keep these **off the Unraid server**:
-
-- the encryption key, or its paper copy from `upb init-key`
-- the PBS root password (or another admin login)
-- this repository, or at least this page
-
-Then do a test restore now and then. It's the only way to know the backups
-work.
+Everything below runs on the **PBS VM** unless it says otherwise. The NFS
+exports are read-only on purpose, so restored data travels back to Unraid
+over SSH (`rsync`) or through your PC (web UI download, then copy into a
+share).
 
 ## Finding a snapshot
 
 ```sh
-upb snapshots            # everything
-upb snapshots appdata    # one job: host/unraid-appdata/2026-09-25T03:00:12Z ...
+upb snapshots                  # everything
+upb snapshots appdata-backup   # host/unraid-appdata-backup/2026-09-25T05:00:12Z ...
 ```
 
-Restore commands use the **latest** snapshot unless you pass one of these
-paths.
+Commands use the **latest** snapshot unless you pass one of these paths as
+the last argument.
 
-## Restoring a whole archive
+## Browsing
 
-Archive names are the names in the job's `SOURCES` (plus `dumps` for database
-dumps). Restore into a **new, empty** directory, then copy what you need:
+The easiest way, with encryption off (the default): PBS web UI >
+Datastore `unraid` > Content > pick a snapshot > **File Browser**. From
+there you can download single files, or whole folders as an archive.
+
+On the command line:
 
 ```sh
-upb restore appdata appdata /mnt/user/restore/appdata
-upb restore databases dumps /mnt/user/restore/dumps
-upb restore flash flash /mnt/user/restore/flash host/unraid-flash/2026-09-20T03:00:05Z
+upb shell photos                 # interactive: cd, ls, find, select, restore-selected
+upb mount photos /mnt/restore    # whole backup as a read-only folder
+umount /mnt/restore
 ```
 
-If the client says the archive doesn't exist, run
-`upb client snapshot files <snapshot>` to see the exact names. Snapshots
-taken with `metadata` or `data` change detection store each archive as a
-`name.mpxar` + `name.ppxar` pair, and you may need to pass `name.mpxar`.
+## Getting data back onto Unraid
 
-## Restoring single files
+Mount the backup on the PBS VM and `rsync` it to Unraid. Nothing needs to
+fit on the PBS VM's own disk:
 
 ```sh
-upb shell appdata appdata
+upb mount photos /mnt/restore
+rsync -a --info=progress2 /mnt/restore/library/ \
+  root@192.168.1.180:/mnt/user/photos-restore/library/
+umount /mnt/restore
 ```
 
-This opens an interactive shell inside the backup:
+Restore into a new folder, check it, then swap it in. Use
+`upb restore JOB DIR` to write a full copy to a local folder on the VM
+instead.
 
-```
-pxar:/ > cd homeassistant
-pxar:/homeassistant/ > ls
-pxar:/homeassistant/ > select configuration.yaml
-pxar:/homeassistant/ > restore-selected /mnt/user/restore/ha
-pxar:/homeassistant/ > exit
-```
+## Recipes
 
-`find <pattern> --select` selects matches anywhere, and `help` lists all
-commands. With encryption off (`PBS_ENCRYPTION=false`), you can also browse
-and download files in the PBS web UI (Datastore > Content > select the
-snapshot > File Browser).
+**Appdata (one container or all)**: the plugin's archives are inside the
+`appdata-backup` snapshots, one dated folder per plugin run.
 
-## App recipes
+1. `upb mount appdata-backup /mnt/restore` and `ls /mnt/restore` to find the
+   run you want.
+2. Copy that dated folder back into the plugin's destination on Unraid:
+   ```sh
+   rsync -a /mnt/restore/<dated-folder> root@192.168.1.180:/mnt/user/backups/appdata/
+   ```
+3. On Unraid: Settings > Appdata Backup > Restore, pick that backup and the
+   containers to restore. The plugin stops and starts them for you.
 
-**One container's appdata**: stop the container, restore
-`appdata` into a scratch folder, replace
-`/mnt/user/appdata/<container>` with the restored copy (keep the old one
-until it works), then start the container.
+**Immich**: restore the database first, then the library.
 
-**A Postgres database** (from the `databases` job's `dumps` archive):
+- Database: Immich's own dumps are in the library's `backups/` folder, and
+  the Appdata Backup archive of `PostgreSQL_Immich` holds its data folder.
+  Follow Immich's guide:
+  <https://immich.app/docs/administration/backup-and-restore>.
+- Library: `upb mount photos …` and `rsync` it back as shown above.
+  Thumbnails and transcoded videos weren't backed up; Immich regenerates
+  them (Administration > Jobs).
 
-```sh
-upb restore databases dumps /mnt/user/restore/dumps
-# stop the apps that use it first; the dump includes DROP statements (--clean)
-gunzip -c /mnt/user/restore/dumps/postgres-postgresql17.sql.gz \
-  | docker exec -i postgresql17 psql -U postgres -d postgres
-```
+**Flash drive / whole server**: the flash backup is in the
+`appdata-backup` snapshots with the plugin's other output.
 
-For **Immich**, follow Immich's restore guide
-(<https://immich.app/docs/administration/backup-and-restore>). The
-`postgres-PostgreSQL_Immich.sql.gz` dump is the same `pg_dumpall` file it
-expects. Restore the database first, then the `photos` archive to the path
-mapped to `/photos`.
+1. Download it through the web UI's File Browser.
+2. Make a new USB stick with the Unraid USB Creator.
+3. Copy the backup's `config/` folder onto the stick, replacing the fresh
+   one.
+4. Boot, and move the license to the new stick (Tools > Registration).
 
-**Paperless-ngx**: restore the `export` archive into the folder mapped to
-`/usr/src/paperless/export` of a fresh Paperless instance, then:
+Disk assignments, shares, Docker templates and plugins come back with it.
+Then restore appdata as above before starting containers.
 
-```sh
-docker exec -it paperless-ngx document_importer ../export
-```
+## If the PBS VM itself is gone
 
-**Flash drive / whole server**: create a new USB with the Unraid USB
-Creator, restore the `flash` archive, and copy its `config/` folder onto the
-new stick (replacing the fresh one). Boot, then transfer the license to the
-new USB GUID (Tools > Registration). Your disk assignments, shares, Docker
-templates and plugins come back with it. Then reinstall upb, restore
-`secrets/` from your offline copies, and restore appdata before starting
-containers.
+The backups live on the datastore disk. Install a fresh PBS (as a VM or on
+any machine), attach the disk, and add the existing datastore (Datastore >
+Add Datastore, with the same path and "reuse existing datastore"). The
+snapshots are all there. Then install upb again from this repo.
 
-## Restoring without Unraid
+## If you turned encryption on
 
-Any Linux machine with `proxmox-backup-client` works, including the PBS host
-itself:
-
-```sh
-export PBS_REPOSITORY='root@pam@<pbs-host>:unraid'
-proxmox-backup-client snapshot list
-proxmox-backup-client restore host/unraid-flash flash.pxar ./flash \
-  --keyfile ./encryption.key
-```
-
-If the key file itself is gone, the paper key printed by `upb init-key`
-holds the same key data (as text and a QR code). See "Paperkey" in the
-Proxmox Backup client documentation for turning it back into a key file.
+Restores need the key file (`/etc/upb/secrets/encryption.key`), and the web
+UI can't browse encrypted snapshots. If the key file is lost, the paper key
+printed by `upb init-key` holds the same key data. See "Paperkey" in the
+Proxmox Backup client docs for turning it back into a key file.

@@ -8,24 +8,9 @@ pbs_repository() {
   printf '%s@%s:%s:%s' "$PBS_AUTH_ID" "$PBS_SERVER" "$PBS_PORT" "$PBS_DATASTORE"
 }
 
-# Resolves PBS_CLIENT, copying the persistent copy from the flash drive into RAM
-# when it is missing or out of date.
 ensure_client() {
-  if [[ -f $PBS_CLIENT_BIN ]]; then
-    if [[ ! -x $PBS_CLIENT_RUNTIME ]] || ! cmp -s "$PBS_CLIENT_BIN" "$PBS_CLIENT_RUNTIME"; then
-      if ! { mkdir -p "$(dirname "$PBS_CLIENT_RUNTIME")" &&
-        install -m 0755 "$PBS_CLIENT_BIN" "$PBS_CLIENT_RUNTIME"; }; then
-        error "cannot install $PBS_CLIENT_BIN to $PBS_CLIENT_RUNTIME"
-        return 1
-      fi
-    fi
-  fi
-  if [[ -x $PBS_CLIENT_RUNTIME ]]; then
-    PBS_CLIENT=$PBS_CLIENT_RUNTIME
-  elif PBS_CLIENT=$(command -v proxmox-backup-client); then
-    :
-  else
-    error "proxmox-backup-client not found; run: upb install-client"
+  if ! PBS_CLIENT=$(command -v "$PBS_CLIENT_CMD"); then
+    error "$PBS_CLIENT_CMD not found (it ships with Proxmox Backup Server: apt install proxmox-backup-client)"
     return 1
   fi
 }

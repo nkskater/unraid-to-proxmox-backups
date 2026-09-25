@@ -1,136 +1,111 @@
 # unraid-to-proxmox-backups
 
-Nightly, encrypted, deduplicated backups of the things on an Unraid server
-that can't be downloaded again (flash drive, appdata, databases, photos,
-documents) to a **Proxmox Backup Server** (PBS).
+Nightly, deduplicated backups of the things on an Unraid server that can't be
+downloaded again (appdata, flash drive, photos, documents) into a
+**Proxmox Backup Server** (PBS) running as a Proxmox VM.
 
-The tool is `upb`: a few bash scripts around the official
-`proxmox-backup-client`, scheduled by the Unraid User Scripts plugin.
+The PBS VM **pulls** the data: it mounts the Unraid shares read-only over
+NFS and backs them up with the official `proxmox-backup-client`. Nothing is
+installed on Unraid, and Unraid holds no credentials.
 
 ```mermaid
 flowchart LR
   subgraph Unraid
-    cron["User Scripts<br/>nightly"] --> upb["upb backup"]
-    upb --> hooks["pre-backup hooks<br/>pg_dump, Paperless export"]
-    upb --> stop["optional container<br/>stop / start"]
-    upb --> client["proxmox-backup-client"]
+    ab["Appdata Backup plugin<br/>03:00, containers stopped,<br/>uncompressed tars + flash"] --> share[("backups share")]
+    photos[("photos share")]
   end
-  client -- "HTTPS :8007<br/>API token, encrypted chunks" --> pbs[("Proxmox Backup Server<br/>datastore: unraid")]
-  pbs --> jobs["prune · verify · garbage collect<br/>scheduled on PBS"]
+  subgraph PBS["PBS VM"]
+    timer["systemd timer 05:00"] --> upb["upb backup"]
+    upb --> client["proxmox-backup-client"]
+    client --> ds[("datastore: unraid")]
+    ds --> jobs["prune · verify · GC"]
+  end
+  share -- "NFS, read-only" --> upb
+  photos -- "NFS, read-only" --> upb
 ```
 
 ## Why this design
 
-- **Incremental and deduplicated.** PBS stores content-addressed chunks, and
-  with `metadata` change detection unchanged files aren't even re-read. After
-  the first run, a multi-TB photo library backs up in minutes.
-- **Encrypted before it leaves Unraid.** PBS only sees ciphertext.
-- **Unraid can't delete its own backups.** The API token has the
-  `DatastoreBackup` role: it can add snapshots but can't prune or delete
-  them. Retention runs on PBS, so ransomware on Unraid can't wipe the history.
-- **Consistent databases.** Postgres is dumped with `pg_dump` while it runs.
-  Containers that use SQLite can be stopped for the few minutes their backup
-  takes and are always restarted afterwards.
-- **Checked on PBS.** Scheduled verify jobs re-read and checksum the stored
-  data.
-- **Loud failures.** Unraid notifications plus an optional healthchecks.io
-  ping, which also catches runs that never started.
+Each part is a tool other people already run and maintain:
+
+- **Appdata Backup** (Unraid plugin) makes consistent copies of appdata,
+  with each container stopped during its backup, plus the flash drive.
+- **Immich** writes its own nightly database dumps into its library.
+- **proxmox-backup-client** runs natively on PBS (Debian), with no fighting
+  Unraid's RAM root filesystem.
+
+This repo is the small glue between them: an NFS mount per share, a
+systemd timer, safety checks, notifications, and the PBS setup.
+
+What that gives you:
+
+- **Unraid can't touch the backups.** It has no credentials, and the exports
+  are read-only. The API token upb uses can only *add* snapshots, and
+  retention runs on PBS.
+- **Incremental and deduplicated.** With `metadata` change detection,
+  unchanged files aren't even re-read. The appdata tars deduplicate against
+  the previous night's once the plugin's compression is off.
+- **Checked on PBS.** Scheduled verify jobs re-read and checksum everything.
+- **Loud failures.** Email, ntfy or healthchecks.io. Healthchecks.io also
+  catches runs that never happened.
+- **Safe by default.** Mounts are forced read-only, an empty or unmounted
+  share is never backed up in place of the real one, and the Appdata Backup
+  share is only read once the plugin has stopped writing.
 
 ## What gets backed up
 
-Every job is one bash file in `/boot/config/upb/jobs.d/` and becomes one
-backup group on PBS (`host/unraid-<job>`). The defaults:
+Each job in `/etc/upb/jobs.d/` names one Unraid folder and becomes a backup
+group `host/unraid-<job>` on PBS:
 
-| Job | Enabled | Contents |
+| Job | Enabled | Unraid folder |
 |---|---|---|
-| `flash` | yes | `/boot`: Unraid config, disk assignments, Docker templates, license key |
-| `databases` | yes | `pg_dumpall` of `PostgreSQL_Immich` and `postgresql17` |
-| `appdata` | yes | `/mnt/user/appdata`, without Plex caches, transcodes and logs |
-| `immich` | after you check the path | Immich photo library, without thumbnails and transcoded video |
-| `paperless` | after you check the path | Paperless-ngx `document_exporter` output |
-| `shares` | after you add shares | important user shares (documents, Syncthing, …) |
+| `appdata-backup` | yes | Appdata Backup plugin destination: appdata of every container (Postgres included, taken stopped) and the flash drive |
+| `photos` | after you check the path | Immich library, without thumbnails and transcoded video |
+| `documents` | template | copy it once per extra share |
 
-The media library is left out on purpose. It's most of the array, and it can
+The media library stays out on purpose. It's most of the array, and it can
 be downloaded again.
 
-## Quick start
+## Setup
 
-1. **Proxmox side**: install PBS and run `proxmox/pbs-setup.sh` on it. It
-   creates the datastore, a backup-only API token, and the prune, verify and
-   GC schedules. See [docs/proxmox-setup.md](docs/proxmox-setup.md).
-2. **Unraid side**: copy this repo to the server and run `bash install.sh`.
-   Then fill in `/boot/config/upb/upb.conf`, paste the token secret, and run:
+1. **Unraid**: turn off compression in Appdata Backup, then export its
+   destination share (and the photos share) over NFS, read-only, to the PBS
+   VM's IP. See [docs/unraid-setup.md](docs/unraid-setup.md).
+2. **PBS VM**: run `./install.sh`, `./proxmox/pbs-setup.sh`, review
+   `/etc/upb/`, then:
    ```sh
-   upb init-key            # encryption key: store the printed copy offline!
-   upb check               # config, jobs and connection
-   upb backup --dry-run    # shows exactly what would run
-   upb backup              # first full backup
+   upb check
+   upb backup
+   systemctl enable --now upb-backup.timer
    ```
-   See [docs/unraid-setup.md](docs/unraid-setup.md).
-3. **Schedule**: Settings > User Scripts > `upb-backup` > Custom `0 3 * * *`.
-4. **Test a restore**: see [docs/restore.md](docs/restore.md). A backup you've
-   never restored from is only a hope.
+   See [docs/pbs-setup.md](docs/pbs-setup.md).
+3. **Try a restore**: see [docs/restore.md](docs/restore.md).
 
 ## Commands
 
 | Command | Does |
 |---|---|
-| `upb backup [--dry-run] [JOB...]` | Run all enabled jobs, or only the named ones |
-| `upb list` | Show jobs, whether they're enabled, their PBS group and sources |
-| `upb check` | Validate config and jobs, test the connection and token |
-| `upb snapshots [JOB]` | List snapshots on PBS |
-| `upb restore JOB ARCHIVE DIR [SNAPSHOT]` | Restore an archive into an empty directory (latest snapshot by default) |
-| `upb shell JOB ARCHIVE [SNAPSHOT]` | Browse a snapshot interactively and restore single files |
-| `upb init-key` | Create the encryption key and print a paper copy |
-| `upb install-client [--from FILE]` | Download the static `proxmox-backup-client`, or install it from a file |
-| `upb client ARGS...` | Any `proxmox-backup-client` command, with the repository and credentials already set |
-
-## Writing a job
-
-```bash
-# /boot/config/upb/jobs.d/60-nextcloud.conf
-JOB_ENABLED=true
-SOURCES=(                       # "<archive-name>:<directory>", one archive each
-  "data:/mnt/user/nextcloud"
-)
-EXCLUDES=("**/cache/" "*.part") # gitignore-style patterns
-STOP_CONTAINERS=(nextcloud)     # stopped after pre_backup, always restarted
-
-pre_backup() {                  # runs with `set -e`: any failing command skips the backup
-  dump_postgres nextcloud-db nextcloud nextcloud   # container, user, database
-}
-post_backup() {                 # runs whenever pre_backup succeeded; $1 = exit code
-  [[ $1 -eq 0 ]] || echo "backup failed" >&2
-}
-```
-
-Order: `pre_backup` (databases are still running) → stop containers →
-backup → start containers → `post_backup`. Files that hooks write to
-`$JOB_DUMP_DIR` are uploaded as a `dumps` archive in the same snapshot.
-`BACKUP_ID=...` overrides the group name. Helpers available in hooks:
-`dump_postgres`, `docker_exec`, `info`, `warn`, `error`.
-
-## Security notes
-
-- The **encryption key** (`/boot/config/upb/secrets/encryption.key`) is the
-  one thing you can't lose. `upb init-key` prints a paper copy: keep it in a
-  password manager or on paper, away from the server. The flash backup skips
-  the secrets folder on purpose.
-- The **API token** can only add backups to its datastore. For a restore
-  after a disaster, root on PBS works too.
-- Turning encryption off (`PBS_ENCRYPTION=false`) lets you browse and
-  download files in the PBS web UI, at the cost of PBS seeing plaintext.
+| `upb backup [--dry-run] [JOB...]` | Back up all enabled jobs, or only the named ones |
+| `upb list` | Jobs, whether they're enabled, their PBS group and export |
+| `upb check` | Validate config, test the token, mount every enabled export |
+| `upb snapshots [JOB]` | List snapshots |
+| `upb restore JOB DIR [SNAPSHOT]` | Restore into an empty local directory (latest snapshot by default) |
+| `upb mount JOB DIR [SNAPSHOT]` | Mount a backup read-only, e.g. to `rsync` it back to Unraid |
+| `upb shell JOB [SNAPSHOT]` | Browse a backup interactively and restore single files |
+| `upb init-key` | Create an encryption key (optional, see docs) |
+| `upb client ARGS...` | Any `proxmox-backup-client` command, with the repository and token already set |
 
 ## Repository layout
 
 ```
-bin/upb                     CLI entry point
-lib/                        common, pbs, docker, jobs, notify, install_client
-config/                     upb.conf and job templates (copied by install.sh)
-unraid/user-scripts/        the scheduled User Script
-proxmox/pbs-setup.sh        one-time PBS preparation (run on the PBS host)
-docs/                       setup and restore guides
-tests/                      bats tests with docker/client stubs
+bin/upb                  CLI entry point
+lib/                     common, jobs, nfs, pbs, notify
+config/                  upb.conf and job templates (copied to /etc/upb by install.sh)
+systemd/                 upb-backup.service and .timer
+proxmox/pbs-setup.sh     datastore, backup-only token, prune/verify/GC schedules
+install.sh               installs upb on the PBS VM
+docs/                    Unraid setup, PBS setup, restore
+tests/                   bats tests with stubs for mount, the client, mail, curl
 ```
 
 ## Development
@@ -141,11 +116,3 @@ make test   # bats
 ```
 
 CI runs both on every push.
-
-## Ideas / next steps
-
-- Offsite copy: a PBS sync job to a second PBS, or an S3 datastore (PBS 4).
-- ZFS snapshot of the appdata pool before the backup, for crash-consistent
-  copies without stopping containers.
-- A monthly scheduled restore test of a small archive.
-- A job for libvirt VM disks (`/mnt/user/domains`) if VMs move to Unraid.

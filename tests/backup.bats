@@ -5,235 +5,206 @@ load test_helper
 
 setup() { setup_upb; }
 
-@test "backup builds the client command for an enabled job" {
-  add_job 10-docs.conf "SOURCES=(\"docs:$DATA/docs\")
-EXCLUDES=(\"*.tmp\" \"/cache/\")"
+@test "backup mounts the export read-only, backs it up and unmounts" {
+  add_job 10-docs.conf 'EXPORT=/mnt/user/docs
+EXCLUDES=("*.tmp" "/cache/")'
 
   run upb backup
   [ "$status" -eq 0 ]
 
-  run calls "pbs backup"
-  [ "${#lines[@]}" -eq 1 ]
-  [[ $output == "pbs backup docs.pxar:$DATA/docs --backup-type host --backup-id unraid-docs "* ]]
-  [[ $output == *"--keyfile $UPB_CONFIG_DIR/secrets/encryption.key --crypt-mode encrypt"* ]]
-  [[ $output == *"--change-detection-mode metadata"* ]]
-  [[ $output == *'--exclude \*.tmp --exclude /cache/'* ]]
+  run grep -E '^(mount|pbs backup|umount)' "$STUB_LOG"
+  [ "${#lines[@]}" -eq 3 ]
+  [ "${lines[0]}" = "mount -t nfs -o ro,soft,timeo=600,retrans=2 unraid.test:/mnt/user/docs $MNT/docs" ]
+  [[ ${lines[1]} == "pbs backup docs.pxar:$MNT/docs --backup-type host --backup-id unraid-docs --crypt-mode none --change-detection-mode metadata --exclude \*.tmp --exclude /cache/" ]]
+  [ "${lines[2]}" = "umount $MNT/docs" ]
+  [ ! -s "$STUB_MOUNTS" ]
 }
 
 @test "credentials go through the environment, never the command line" {
-  add_job 10-docs.conf "SOURCES=(\"docs:$DATA/docs\")"
+  add_job 10-docs.conf 'EXPORT=/mnt/user/docs'
 
   run upb backup
   [ "$status" -eq 0 ]
-  grep -qx 'env PBS_REPOSITORY=unraid-backup@pbs!unraid@pbs.test:8007:store1 PBS_PASSWORD=s3cr3t-token PBS_FINGERPRINT=aa:bb:cc' "$STUB_LOG"
+  grep -qx 'env PBS_REPOSITORY=unraid-backup@pbs!unraid@localhost:8007:store1 PBS_PASSWORD=s3cr3t-token PBS_FINGERPRINT=aa:bb:cc' "$STUB_LOG"
   run grep -c s3cr3t < <(calls "pbs ")
   [ "$output" = 0 ]
 }
 
-@test "namespace, no encryption and extra args are passed through" {
+@test "encryption, namespace, a custom group and extra args are passed through" {
+  echo '{}' >"$UPB_CONFIG_DIR/secrets/encryption.key"
   cat >>"$UPB_CONFIG_DIR/upb.conf" <<'EOF'
 PBS_NAMESPACE="unraid"
-PBS_ENCRYPTION=false
+PBS_ENCRYPTION=true
 PBS_CHANGE_DETECTION_MODE=""
 PBS_EXTRA_ARGS=(--rate 10MiB)
 EOF
-  add_job 10-docs.conf "SOURCES=(\"docs:$DATA/docs\")
-BACKUP_ID=custom-id"
+  add_job 10-docs.conf 'EXPORT=/mnt/user/docs
+BACKUP_ID=custom-id'
 
   run upb backup
   [ "$status" -eq 0 ]
   run calls "pbs backup"
-  [[ $output == *"--backup-id custom-id --ns unraid --crypt-mode none --rate 10MiB" ]]
-  [[ $output != *--keyfile* ]]
+  [[ $output == *"--backup-id custom-id --ns unraid --keyfile $UPB_CONFIG_DIR/secrets/encryption.key --crypt-mode encrypt --rate 10MiB" ]]
   [[ $output != *--change-detection-mode* ]]
 }
 
 @test "disabled jobs are skipped unless named explicitly" {
-  add_job 10-on.conf "SOURCES=(\"docs:$DATA/docs\")"
-  add_job 20-off.conf "JOB_ENABLED=false
-SOURCES=(\"photos:$DATA/photos\")"
+  add_job 10-docs.conf 'EXPORT=/mnt/user/docs'
+  add_job 20-photos.conf 'JOB_ENABLED=false
+EXPORT=/mnt/user/photos'
 
   run upb backup
   [ "$status" -eq 0 ]
   [ "$(calls 'pbs backup' | wc -l)" -eq 1 ]
-  calls "pbs backup" | grep -q -- "--backup-id unraid-on"
+  calls "pbs backup" | grep -q -- "--backup-id unraid-docs"
 
   : >"$STUB_LOG"
-  run upb backup off
+  run upb backup photos
   [ "$status" -eq 0 ]
   [ "$(calls 'pbs backup' | wc -l)" -eq 1 ]
-  calls "pbs backup" | grep -q -- "--backup-id unraid-off"
+  calls "pbs backup" | grep -q -- "--backup-id unraid-photos"
 }
 
 @test "an unknown job name is an error" {
-  add_job 10-docs.conf "SOURCES=(\"docs:$DATA/docs\")"
+  add_job 10-docs.conf 'EXPORT=/mnt/user/docs'
   run upb backup nope
   [ "$status" -eq 1 ]
   [[ $output == *"unknown job: nope"* ]]
 }
 
-@test "a failing job doesn't stop the others, and the run reports failure" {
-  add_job 10-broken.conf "SOURCES=(\"gone:$DATA/does-not-exist\")"
-  add_job 20-docs.conf "SOURCES=(\"docs:$DATA/docs\")"
+@test "a share that can't be mounted fails its job but not the others" {
+  export STUB_MOUNT_FAIL="/mnt/user/photos"
+  add_job 10-photos.conf 'EXPORT=/mnt/user/photos'
+  add_job 20-docs.conf 'EXPORT=/mnt/user/docs'
 
   run upb backup
   [ "$status" -eq 1 ]
-  [[ $output == *"source directory does not exist: $DATA/does-not-exist"* ]]
-  [[ $output == *"FAIL  broken"* ]]
+  [[ $output == *"cannot mount unraid.test:/mnt/user/photos"* ]]
+  [[ $output == *"FAIL  photos"* ]]
   [[ $output == *"OK    docs"* ]]
+  [ "$(calls 'pbs backup' | wc -l)" -eq 1 ]
   calls "pbs backup" | grep -q -- "--backup-id unraid-docs"
-  calls "notify" | grep -q -- "-i alert"
 }
 
-@test "a success notification is only sent when enabled" {
-  add_job 10-docs.conf "SOURCES=(\"docs:$DATA/docs\")"
-  run upb backup
-  [ -z "$(calls notify)" ]
+@test "an empty share is never backed up" {
+  add_job 10-empty.conf 'EXPORT=/mnt/user/empty'
 
-  echo "NOTIFY_ON_SUCCESS=true" >>"$UPB_CONFIG_DIR/upb.conf"
   run upb backup
-  calls notify | grep -q -- "-i normal"
+  [ "$status" -eq 1 ]
+  [[ $output == *"is empty; refusing to back up"* ]]
+  [ -z "$(calls 'pbs backup')" ]
+  [ ! -s "$STUB_MOUNTS" ]
 }
 
-@test "containers are stopped in order and restarted in reverse" {
-  export STUB_DOCKER_RUNNING="app1 app2"
-  add_job 10-docs.conf "SOURCES=(\"docs:$DATA/docs\")
-STOP_CONTAINERS=(app1 app2 not-running)"
-  export STUB_DOCKER_KNOWN="app1 app2 not-running"
+@test "a local folder is never backed up in place of a share that didn't mount" {
+  export STUB_MOUNT_SILENT="/mnt/user/docs"
+  add_job 10-docs.conf 'EXPORT=/mnt/user/docs'
+  mkdir -p "$MNT/docs"
+  echo "local file" >"$MNT/docs/stray.txt"
 
   run upb backup
-  [ "$status" -eq 0 ]
-  run grep -E '^(docker (stop|start)|pbs backup)' "$STUB_LOG"
-  [[ ${lines[0]} == "docker stop -t 60 app1" ]]
-  [[ ${lines[1]} == "docker stop -t 60 app2" ]]
-  [[ ${lines[2]} == "pbs backup"* ]]
-  [[ ${lines[3]} == "docker start app2" ]]
-  [[ ${lines[4]} == "docker start app1" ]]
-  [ "${#lines[@]}" -eq 5 ]
+  [ "$status" -eq 1 ]
+  [[ $output == *"is not a mount point after mounting"* ]]
+  [ -z "$(calls 'pbs backup')" ]
 }
 
-@test "containers are restarted when the backup fails" {
-  export STUB_DOCKER_RUNNING="app1" STUB_PBS_EXIT=2
-  add_job 10-docs.conf "SOURCES=(\"docs:$DATA/docs\")
-STOP_CONTAINERS=(app1)"
+@test "the share is unmounted when the backup fails" {
+  export STUB_PBS_EXIT=2
+  add_job 10-docs.conf 'EXPORT=/mnt/user/docs'
 
   run upb backup
   [ "$status" -eq 1 ]
   [[ $output == *"FAIL  docs (exit 2)"* ]]
-  calls "docker start app1" | grep -q .
+  calls "umount $MNT/docs" | grep -q .
+  [ ! -s "$STUB_MOUNTS" ]
 }
 
-@test "a failing command in pre_backup skips the backup" {
-  export STUB_DOCKER_RUNNING="app1"
-  add_job 10-docs.conf "SOURCES=(\"docs:$DATA/docs\")
-STOP_CONTAINERS=(app1)
-pre_backup() {
-  false
-  echo 'not reached' >\"$BATS_TEST_TMPDIR/reached\"
-}"
-
-  run upb backup
-  [ "$status" -eq 1 ]
-  [[ $output == *"pre_backup failed"* ]]
-  [ ! -e "$BATS_TEST_TMPDIR/reached" ]
-  [ -z "$(calls 'pbs backup')" ]
-  [ -z "$(calls 'docker stop')" ]
-}
-
-@test "post_backup runs with the exit code even when stopping a container fails" {
-  export STUB_DOCKER_RUNNING="app1 app2" STUB_DOCKER_FAIL="stop:app2"
-  add_job 10-docs.conf "SOURCES=(\"docs:$DATA/docs\")
-STOP_CONTAINERS=(app1 app2)
-post_backup() { echo \"rc=\$1\" >\"$BATS_TEST_TMPDIR/post\"; }"
-
-  run upb backup
-  [ "$status" -eq 1 ]
-  [ -z "$(calls 'pbs backup')" ]
-  calls "docker start app1" | grep -q .
-  [ "$(cat "$BATS_TEST_TMPDIR/post")" = "rc=1" ]
-}
-
-@test "dump_postgres writes a dump that is uploaded as the dumps archive" {
-  export STUB_DOCKER_RUNNING="pg"
-  add_job 20-databases.conf 'pre_backup() {
-  dump_postgres pg
-  dump_postgres pg app appdb
-}'
+@test "a mount left over from an earlier run is replaced" {
+  add_job 10-docs.conf 'EXPORT=/mnt/user/docs'
+  mkdir -p "$MNT/docs"
+  echo "$MNT/docs" >"$STUB_MOUNTS"
 
   run upb backup
   [ "$status" -eq 0 ]
-  dumps="$BATS_TEST_TMPDIR/staging/databases"
-  [[ $(gzip -dc "$dumps/postgres-pg.sql.gz") == "-- output of: pg_dumpall --username=postgres --clean --if-exists" ]]
-  [[ $(gzip -dc "$dumps/postgres-pg-appdb.sql.gz") == *"pg_dump --username=app --dbname=appdb"* ]]
-  calls "pbs backup" | grep -q "pbs backup dumps.pxar:$dumps --backup-type host --backup-id unraid-databases"
+  [[ $output == *"still mounted from an earlier run"* ]]
+  run grep -E '^(mount|umount)' "$STUB_LOG"
+  [[ ${lines[0]} == "umount $MNT/docs" ]]
+  [[ ${lines[1]} == "mount "* ]]
 }
 
-@test "a failed dump fails the job and keeps the previous dump" {
-  export STUB_DOCKER_RUNNING="pg" STUB_DOCKER_FAIL="exec:pg"
-  mkdir -p "$BATS_TEST_TMPDIR/staging/databases"
-  echo old | gzip >"$BATS_TEST_TMPDIR/staging/databases/postgres-pg.sql.gz"
-  add_job 20-databases.conf 'pre_backup() { dump_postgres pg; }'
+@test "WAIT_FOR_QUIET gives up while files keep changing" {
+  echo 'QUIET_MINUTES=5
+QUIET_TIMEOUT_MINUTES=0' >>"$UPB_CONFIG_DIR/upb.conf"
+  touch "$STUB_EXPORTS/mnt/user/docs/letter.txt"
+  add_job 10-docs.conf 'EXPORT=/mnt/user/docs
+WAIT_FOR_QUIET=true'
 
   run upb backup
   [ "$status" -eq 1 ]
+  [[ $output == *"still changing after 0 min"* ]]
   [ -z "$(calls 'pbs backup')" ]
-  [[ $(gzip -dc "$BATS_TEST_TMPDIR/staging/databases/postgres-pg.sql.gz") == old ]]
-  [ ! -e "$BATS_TEST_TMPDIR/staging/databases/postgres-pg.sql.gz.partial" ]
+  [ ! -s "$STUB_MOUNTS" ]
 }
 
-@test "a job with nothing to back up fails" {
-  add_job 10-empty.conf 'SOURCES=()'
+@test "WAIT_FOR_QUIET proceeds when nothing changed recently" {
+  echo 'QUIET_MINUTES=5
+QUIET_TIMEOUT_MINUTES=0' >>"$UPB_CONFIG_DIR/upb.conf"
+  add_job 10-docs.conf 'EXPORT=/mnt/user/docs
+WAIT_FOR_QUIET=true'
+
   run upb backup
-  [ "$status" -eq 1 ]
-  [[ $output == *"nothing to back up"* ]]
-}
-
-@test "invalid and reserved archive names are rejected" {
-  add_job 10-bad.conf "SOURCES=(\"has space:$DATA/docs\" \"dumps:$DATA/photos\")"
-  run upb backup
-  [ "$status" -eq 1 ]
-  [[ $output == *"archive name 'has space' may only contain"* ]]
-  [[ $output == *"'dumps' is reserved"* ]]
-  [ -z "$(calls 'pbs backup')" ]
-}
-
-@test "dry run changes nothing" {
-  export STUB_DOCKER_RUNNING="app1"
-  add_job 10-docs.conf "SOURCES=(\"docs:$DATA/docs\")
-STOP_CONTAINERS=(app1)
-pre_backup() { dump_postgres pg; }"
-
-  run upb backup --dry-run
   [ "$status" -eq 0 ]
-  [[ $output == *"[dry-run] proxmox-backup-client backup docs.pxar:$DATA/docs"* ]]
-  [[ $output == *"[dry-run] docker stop app1"* ]]
-  [ -z "$(calls 'pbs ')" ]
-  [ -z "$(calls 'docker stop')" ]
-  [ -z "$(calls 'docker exec')" ]
-  [ ! -e "$BATS_TEST_TMPDIR/staging" ]
+  calls "pbs backup" | grep -q .
 }
 
-@test "config problems are all reported before anything runs" {
+@test "config problems are all reported, and the failure is notified" {
   cat >"$UPB_CONFIG_DIR/upb.conf" <<EOF
+NFS_OPTIONS="rw,hard"
 PBS_AUTH_ID="root@pam"
+PBS_ENCRYPTION=true
 PBS_KEYFILE="$BATS_TEST_TMPDIR/missing.key"
 LOCK_FILE="$BATS_TEST_TMPDIR/upb.lock"
-UNRAID_NOTIFY_CMD="$BATS_TEST_DIRNAME/stubs/notify"
+NOTIFY_EMAIL="me@example.com"
 EOF
-  add_job 10-docs.conf "SOURCES=(\"docs:$DATA/docs\")"
+  add_job 10-docs.conf 'EXPORT=/mnt/user/docs'
 
   run upb backup
   [ "$status" -eq 1 ]
-  [[ $output == *"PBS_SERVER is not set"* ]]
+  [[ $output == *"UNRAID_HOST is not set"* ]]
+  [[ $output == *"NFS_OPTIONS must include 'ro'"* ]]
   [[ $output == *"PBS_DATASTORE is not set"* ]]
   [[ $output == *"must be an API token id"* ]]
   [[ $output == *"key file is missing"* ]]
+  [ -z "$(calls 'mount')" ]
   [ -z "$(calls 'pbs ')" ]
-  calls notify | grep -q -- "-i alert -s Backup did not run"
+  grep -qx "Subject: upb: backup did not run" "$STUB_LOG"
+}
+
+@test "invalid jobs are rejected before mounting" {
+  add_job 10-bad.name.conf 'EXPORT=/mnt/user/docs'
+  add_job 20-noexport.conf 'WAIT_FOR_QUIET=maybe'
+
+  run upb backup
+  [ "$status" -eq 1 ]
+  [[ $output == *"[bad.name] job names"* ]]
+  [[ $output == *"[noexport] EXPORT must be the absolute Unraid path"* ]]
+  [[ $output == *"WAIT_FOR_QUIET must be true or false"* ]]
+  [ -z "$(calls 'mount')" ]
+}
+
+@test "dry run mounts nothing and runs nothing" {
+  add_job 10-docs.conf 'EXPORT=/mnt/user/docs
+WAIT_FOR_QUIET=true'
+
+  run upb backup --dry-run
+  [ "$status" -eq 0 ]
+  [[ $output == *"[dry-run] mount -t nfs -o ro,soft,timeo=600,retrans=2 unraid.test:/mnt/user/docs $MNT/docs"* ]]
+  [[ $output == *"[dry-run] proxmox-backup-client backup docs.pxar:$MNT/docs"* ]]
+  [ ! -s "$STUB_LOG" ]
 }
 
 @test "only one backup runs at a time" {
-  add_job 10-docs.conf "SOURCES=(\"docs:$DATA/docs\")"
+  add_job 10-docs.conf 'EXPORT=/mnt/user/docs'
   exec 9>"$BATS_TEST_TMPDIR/upb.lock"
   flock 9
   run upb backup
@@ -242,42 +213,98 @@ EOF
   [[ $output == *"already in progress"* ]]
 }
 
-@test "restore uses the latest snapshot of the job's group by default" {
-  add_job 10-docs.conf "SOURCES=(\"docs:$DATA/docs\")"
+@test "failures are emailed, pushed to ntfy and reported to healthchecks" {
+  export STUB_PBS_EXIT=1
+  cat >>"$UPB_CONFIG_DIR/upb.conf" <<'EOF'
+NOTIFY_EMAIL="me@example.com"
+NOTIFY_NTFY_URL="https://ntfy.test/backups"
+HEALTHCHECK_URL="https://hc.test/ping/abc"
+EOF
+  add_job 10-docs.conf 'EXPORT=/mnt/user/docs'
 
-  run upb restore docs docs "$BATS_TEST_TMPDIR/restore"
+  run upb backup
+  [ "$status" -eq 1 ]
+  grep -qx "To: me@example.com" "$STUB_LOG"
+  grep -qx "Subject: upb: 1 of 1 backup job(s) failed" "$STUB_LOG"
+  grep -qx "FAIL  docs (exit 1)" "$STUB_LOG"
+  calls curl | grep -q -- "-H Title: upb: 1 of 1 backup job(s) failed -H Priority: high"
+  grep -q "https://ntfy.test/backups$" "$STUB_LOG"
+  calls curl | grep -q "https://hc.test/ping/abc/start"
+  calls curl | grep -q "https://hc.test/ping/abc/fail"
+}
+
+@test "success is only notified when enabled, but always pinged" {
+  cat >>"$UPB_CONFIG_DIR/upb.conf" <<'EOF'
+NOTIFY_EMAIL="me@example.com"
+HEALTHCHECK_URL="https://hc.test/ping/abc"
+EOF
+  add_job 10-docs.conf 'EXPORT=/mnt/user/docs'
+
+  run upb backup
   [ "$status" -eq 0 ]
-  calls "pbs restore" | grep -qx "pbs restore host/unraid-docs docs.pxar $BATS_TEST_TMPDIR/restore --keyfile $UPB_CONFIG_DIR/secrets/encryption.key"
+  [ -z "$(calls sendmail)" ]
+  calls curl | grep -q "https://hc.test/ping/abc$"
 
-  run upb restore docs docs.mpxar "$BATS_TEST_TMPDIR/restore2" host/unraid-docs/2026-01-01T00:00:00Z
-  calls "pbs restore" | grep -q "pbs restore host/unraid-docs/2026-01-01T00:00:00Z docs.mpxar "
+  echo "NOTIFY_ON_SUCCESS=true" >>"$UPB_CONFIG_DIR/upb.conf"
+  run upb backup
+  grep -qx "Subject: upb: 1 backup job(s) OK" "$STUB_LOG"
+}
+
+@test "restore uses the latest snapshot of the job's group by default" {
+  add_job 10-docs.conf 'EXPORT=/mnt/user/docs'
+
+  run upb restore docs "$BATS_TEST_TMPDIR/restore"
+  [ "$status" -eq 0 ]
+  calls "pbs restore" | grep -qx "pbs restore host/unraid-docs docs.pxar $BATS_TEST_TMPDIR/restore"
+
+  run upb restore docs "$BATS_TEST_TMPDIR/restore2" host/unraid-docs/2026-01-01T00:00:00Z
+  calls "pbs restore" | grep -q "pbs restore host/unraid-docs/2026-01-01T00:00:00Z docs.pxar "
 }
 
 @test "restore refuses a non-empty target" {
-  add_job 10-docs.conf "SOURCES=(\"docs:$DATA/docs\")"
-  touch "$DATA/docs/file"
-  run upb restore docs docs "$DATA/docs"
+  add_job 10-docs.conf 'EXPORT=/mnt/user/docs'
+  mkdir -p "$BATS_TEST_TMPDIR/full"
+  touch "$BATS_TEST_TMPDIR/full/file"
+  run upb restore docs "$BATS_TEST_TMPDIR/full"
   [ "$status" -eq 1 ]
   [[ $output == *"is not empty"* ]]
   [ -z "$(calls 'pbs restore')" ]
 }
 
-@test "list shows jobs and their groups" {
-  add_job 10-docs.conf "SOURCES=(\"docs:$DATA/docs\")"
-  add_job 20-databases.conf 'JOB_ENABLED=false'
-  run upb list
+@test "mount and shell open the job's archive" {
+  add_job 10-docs.conf 'EXPORT=/mnt/user/docs'
+  run upb mount docs "$BATS_TEST_TMPDIR/browse"
   [ "$status" -eq 0 ]
-  [[ ${lines[1]} == "docs"*"true"*"host/unraid-docs"*"docs:$DATA/docs" ]]
-  [[ ${lines[2]} == "databases"*"false"*"host/unraid-databases"*"(dumps only)" ]]
+  calls "pbs mount" | grep -qx "pbs mount host/unraid-docs docs.pxar $BATS_TEST_TMPDIR/browse"
+  run upb shell docs
+  calls "pbs catalog" | grep -qx "pbs catalog shell host/unraid-docs docs.pxar"
 }
 
-@test "check validates jobs and talks to the server" {
-  add_job 10-docs.conf "SOURCES=(\"docs:$DATA/docs\")"
-  run upb check
+@test "list shows jobs, groups and exports" {
+  add_job 10-docs.conf 'EXPORT=/mnt/user/docs'
+  add_job 20-photos.conf 'JOB_ENABLED=false
+EXPORT=/mnt/user/photos'
+  run upb list
   [ "$status" -eq 0 ]
+  [[ ${lines[1]} == "docs"*"true"*"host/unraid-docs"*"unraid.test:/mnt/user/docs" ]]
+  [[ ${lines[2]} == "photos"*"false"*"host/unraid-photos"*"unraid.test:/mnt/user/photos" ]]
+}
+
+@test "check talks to PBS and mounts every enabled export" {
+  add_job 10-docs.conf 'EXPORT=/mnt/user/docs'
+  add_job 20-empty.conf 'EXPORT=/mnt/user/empty'
+  add_job 30-off.conf 'JOB_ENABLED=false
+EXPORT=/mnt/user/nowhere'
+
+  run upb check
+  [ "$status" -eq 1 ]
   [[ $output == *"PBS reachable"* ]]
+  [[ $output == *"NFS exports offered by unraid.test"* ]]
   [[ $output == *"job docs: ok"* ]]
-  calls "pbs version" | grep -q .
+  [[ $output == *"unraid.test:/mnt/user/empty is empty"* ]]
+  [[ $output == *"job off: disabled"* ]]
+  [ ! -s "$STUB_MOUNTS" ]
+  [ -z "$(calls 'pbs backup')" ]
 }
 
 @test "the shipped example config and jobs load cleanly" {
@@ -287,6 +314,7 @@ EOF
   done
   run upb list
   [ "$status" -eq 0 ]
-  [[ $output == *"flash"*"true"*"host/unraid-flash"*"flash:/boot"* ]]
-  [[ $output == *"immich"*"false"* ]]
+  [[ $output == *"appdata-backup"*"true"*"host/unraid-appdata-backup"*"192.168.1.180:/mnt/user/backups/appdata"* ]]
+  [[ $output == *"photos"*"false"* ]]
+  [[ $output == *"documents"*"false"* ]]
 }

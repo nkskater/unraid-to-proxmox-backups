@@ -1,30 +1,36 @@
 # shellcheck shell=bash
-# Shared setup: a throwaway config dir, stubbed docker/client/notify, and data dirs.
+# Shared setup: a throwaway config dir, a fake Unraid ($STUB_EXPORTS) served by
+# the mount stubs, and stubbed client/mail/curl.
 
 setup_upb() {
   UPB_ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
-  DATA="$BATS_TEST_TMPDIR/data"
   export UPB_CONFIG_DIR="$BATS_TEST_TMPDIR/config"
   export STUB_LOG="$BATS_TEST_TMPDIR/calls.log"
+  export STUB_MOUNTS="$BATS_TEST_TMPDIR/mounts"
+  export STUB_EXPORTS="$BATS_TEST_TMPDIR/unraid"
   export PATH="$BATS_TEST_DIRNAME/stubs:$PATH"
-  unset STUB_PBS_EXIT STUB_DOCKER_RUNNING STUB_DOCKER_KNOWN STUB_DOCKER_FAIL
+  MNT="$BATS_TEST_TMPDIR/mnt"
+  unset STUB_PBS_EXIT STUB_MOUNT_FAIL STUB_MOUNT_SILENT STUB_CURL_EXIT STUB_PBM_EXISTING
 
-  mkdir -p "$UPB_CONFIG_DIR/jobs.d" "$UPB_CONFIG_DIR/secrets" "$DATA/docs" "$DATA/photos"
+  mkdir -p "$UPB_CONFIG_DIR/jobs.d" "$UPB_CONFIG_DIR/secrets" \
+    "$STUB_EXPORTS/mnt/user/docs" "$STUB_EXPORTS/mnt/user/photos" "$STUB_EXPORTS/mnt/user/empty"
   : >"$STUB_LOG"
+  : >"$STUB_MOUNTS"
+  echo "letter" >"$STUB_EXPORTS/mnt/user/docs/letter.txt"
+  echo "jpeg" >"$STUB_EXPORTS/mnt/user/photos/img.jpg"
+  touch -d '2 hours ago' "$STUB_EXPORTS/mnt/user/docs/letter.txt" "$STUB_EXPORTS/mnt/user/photos/img.jpg"
   echo "s3cr3t-token" >"$UPB_CONFIG_DIR/secrets/pbs-token"
-  echo '{"kdf":null}' >"$UPB_CONFIG_DIR/secrets/encryption.key"
 
   cat >"$UPB_CONFIG_DIR/upb.conf" <<EOF
-PBS_SERVER="pbs.test"
+UNRAID_HOST="unraid.test"
+MOUNT_ROOT="$MNT"
 PBS_DATASTORE="store1"
 PBS_AUTH_ID="unraid-backup@pbs!unraid"
 PBS_FINGERPRINT="aa:bb:cc"
-PBS_CLIENT_BIN="$BATS_TEST_TMPDIR/no-persistent-client"
-PBS_CLIENT_RUNTIME="$BATS_TEST_DIRNAME/stubs/proxmox-backup-client"
-STAGING_DIR="$BATS_TEST_TMPDIR/staging"
+PBS_CLIENT_CMD="$BATS_TEST_DIRNAME/stubs/proxmox-backup-client"
 LOG_DIR="$BATS_TEST_TMPDIR/logs"
 LOCK_FILE="$BATS_TEST_TMPDIR/upb.lock"
-UNRAID_NOTIFY_CMD="$BATS_TEST_DIRNAME/stubs/notify"
+QUIET_POLL_SECONDS=1
 EOF
 }
 

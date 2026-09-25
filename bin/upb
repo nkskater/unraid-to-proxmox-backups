@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# upb: back up important Unraid data to a Proxmox Backup Server.
+# upb: pull important Unraid shares into Proxmox Backup Server.
+# Runs on the PBS host; mounts each share read-only over NFS and backs it up.
 set -uo pipefail
 
 UPB_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
@@ -9,36 +10,32 @@ UPB_VERSION="$(cat "$UPB_ROOT/VERSION" 2>/dev/null || echo dev)"
 source "$UPB_ROOT/lib/common.sh"
 # shellcheck source=lib/pbs.sh
 source "$UPB_ROOT/lib/pbs.sh"
-# shellcheck source=lib/docker.sh
-source "$UPB_ROOT/lib/docker.sh"
+# shellcheck source=lib/nfs.sh
+source "$UPB_ROOT/lib/nfs.sh"
 # shellcheck source=lib/notify.sh
 source "$UPB_ROOT/lib/notify.sh"
 # shellcheck source=lib/jobs.sh
 source "$UPB_ROOT/lib/jobs.sh"
-# shellcheck source=lib/install_client.sh
-source "$UPB_ROOT/lib/install_client.sh"
 
 usage() {
   cat <<EOF
 Usage: upb [--config-dir DIR] <command> [args]
 
-Back up important Unraid data to a Proxmox Backup Server.
+Pull important Unraid shares into Proxmox Backup Server.
 
 Commands:
-  backup [--dry-run] [JOB...]    Run all enabled jobs, or only the named ones
-  list                           Show the configured jobs
-  check                          Validate config and jobs, test the connection to PBS
-  snapshots [JOB]                List snapshots on PBS
-  restore JOB ARCHIVE DIR [SNAPSHOT]
-                                 Restore an archive into an empty DIR
-                                 (latest snapshot unless SNAPSHOT is given)
-  shell JOB ARCHIVE [SNAPSHOT]   Browse a backup and restore single files
-  init-key                       Create the client-side encryption key
-  install-client [--from FILE]   Download proxmox-backup-client, or install it from
-                                 a local binary or .deb
-  client ARGS...                 Run proxmox-backup-client against the configured
-                                 repository, e.g. "upb client snapshot list"
-  version                        Print the upb version
+  backup [--dry-run] [JOB...]   Run all enabled jobs, or only the named ones
+  list                          Show the configured jobs
+  check                         Validate config, test PBS and mount every enabled export
+  snapshots [JOB]               List snapshots on PBS
+  restore JOB DIR [SNAPSHOT]    Restore a job's backup into an empty local DIR
+                                (latest snapshot unless SNAPSHOT is given)
+  mount JOB DIR [SNAPSHOT]      Mount a backup read-only at DIR (unmount: umount DIR)
+  shell JOB [SNAPSHOT]          Browse a backup and restore single files
+  init-key                      Create a client-side encryption key
+  client ARGS...                Run proxmox-backup-client against the configured
+                                repository, e.g. "upb client snapshot list"
+  version                       Print the upb version
 
 Config directory: $UPB_CONFIG_DIR (change it with --config-dir or UPB_CONFIG_DIR)
 EOF
@@ -56,7 +53,7 @@ prepare_pbs() {
 abort_backup() {
   error "$1"
   if ! dry_run; then
-    notify_unraid alert "Backup did not run" "$1"
+    notify failure "upb: backup did not run" "$1"
     healthcheck_ping fail "$UPB_LOG_FILE"
   fi
   exit 1
@@ -92,10 +89,10 @@ cmd_backup() {
   dry_run || setup_logging backup
   acquire_lock
   if ! dry_run; then
-    ensure_client || abort_backup "proxmox-backup-client is missing (run: upb install-client)"
+    ensure_client || abort_backup "proxmox-backup-client is missing"
     healthcheck_ping start
   fi
-  info "upb $UPB_VERSION: ${#files[@]} job(s) to $(pbs_repository)${PBS_NAMESPACE:+ ns=$PBS_NAMESPACE}"
+  info "upb $UPB_VERSION: ${#files[@]} job(s) from $UNRAID_HOST to $(pbs_repository)${PBS_NAMESPACE:+ ns=$PBS_NAMESPACE}"
 
   for f in "${files[@]}"; do
     name=$(job_name "$f")
@@ -118,12 +115,12 @@ cmd_backup() {
   printf -v summary '%s\n' "${results[@]}"
   summary+="Log: $UPB_LOG_FILE"
   if ((failed)); then
-    notify_unraid alert "Backup failed: $failed of ${#files[@]} job(s)" "$failed of ${#files[@]} backup job(s) failed" "$summary"
+    notify failure "upb: $failed of ${#files[@]} backup job(s) failed" "$summary"
     healthcheck_ping fail "$UPB_LOG_FILE"
     return 1
   fi
   if [[ $NOTIFY_ON_SUCCESS == true ]]; then
-    notify_unraid normal "Backup OK: ${#files[@]} job(s)" "All ${#files[@]} backup job(s) succeeded" "$summary"
+    notify success "upb: ${#files[@]} backup job(s) OK" "$summary"
   fi
   healthcheck_ping "" "$UPB_LOG_FILE"
 }
@@ -131,11 +128,11 @@ cmd_backup() {
 cmd_list() {
   local f
   load_config
-  printf '%-14s %-8s %-26s %s\n' JOB ENABLED GROUP SOURCES
+  printf '%-16s %-8s %-28s %s\n' JOB ENABLED GROUP EXPORT
   while IFS= read -r f; do
     (
       load_job "$f" >/dev/null 2>&1
-      printf '%-14s %-8s %-26s %s\n' "$JOB_NAME" "$JOB_ENABLED" "host/$BACKUP_ID" "${SOURCES[*]:-(dumps only)}"
+      printf '%-16s %-8s %-28s %s\n' "$JOB_NAME" "$JOB_ENABLED" "host/$BACKUP_ID" "$UNRAID_HOST:$EXPORT"
     )
   done < <(job_files)
 }
@@ -144,12 +141,12 @@ cmd_check() {
   local f rc=0 out
   load_config
   info "config:     $UPB_CONFIG_DIR/upb.conf"
+  info "unraid:     $UNRAID_HOST (NFS options: $NFS_OPTIONS)"
   info "repository: $(pbs_repository)${PBS_NAMESPACE:+ (namespace $PBS_NAMESPACE)}"
   info "encryption: $PBS_ENCRYPTION"
   validate_config || rc=1
 
   if ensure_client; then
-    info "client:     $PBS_CLIENT"
     if ((rc == 0)); then
       if out=$(pbs_client version 2>&1); then
         info "PBS reachable and token accepted:"
@@ -164,16 +161,19 @@ cmd_check() {
     rc=1
   fi
 
-  if command -v docker >/dev/null && docker info >/dev/null 2>&1; then
-    info "docker:     available"
-  else
-    warn "docker is not available: jobs that stop containers or dump databases will fail"
+  if [[ -n $UNRAID_HOST ]] && command -v showmount >/dev/null; then
+    if out=$(showmount -e "$UNRAID_HOST" 2>&1); then
+      info "NFS exports offered by $UNRAID_HOST:"
+      printf '  %s\n' "$out"
+    else
+      warn "showmount -e $UNRAID_HOST failed (is NFS enabled on Unraid?): $out"
+    fi
   fi
 
   while IFS= read -r f; do
     if ! job_enabled "$f"; then
       info "job $(job_name "$f"): disabled"
-    elif (load_job "$f" && validate_job); then
+    elif (check_job "$f"); then
       info "job $(job_name "$f"): ok"
     else
       rc=1
@@ -182,7 +182,6 @@ cmd_check() {
 
   if ((rc == 0)); then
     info "all checks passed"
-    [[ $PBS_ENCRYPTION == true ]] && info "reminder: keep an offline copy of $PBS_KEYFILE"
   fi
   return "$rc"
 }
@@ -200,29 +199,39 @@ cmd_snapshots() {
 }
 
 cmd_restore() {
-  (($# >= 3)) || die "usage: upb restore JOB ARCHIVE DIR [SNAPSHOT]"
-  local job=$1 archive=$2 target=$3 snapshot=${4:-} id
+  (($# >= 2)) || die "usage: upb restore JOB DIR [SNAPSHOT]"
+  local job=$1 target=$2 snapshot=${3:-} id
   prepare_pbs
   id=$(job_backup_id "$job") || exit 1
-  [[ $archive == *.* ]] || archive+=".pxar"
-  snapshot=${snapshot:-host/$id}
   if [[ -e $target && -n $(find "$target" -mindepth 1 -print -quit 2>/dev/null) ]]; then
-    die "$target is not empty; restore into a new directory and copy what you need"
+    die "$target is not empty; restore into a new directory"
   fi
-  local -a args=(restore "$snapshot" "$archive" "$target")
+  local -a args=(restore "${snapshot:-host/$id}" "$job.pxar" "$target")
   add_ns_args args
   add_key_args args
-  info "restoring $archive from $snapshot into $target"
+  info "restoring $job.pxar from ${snapshot:-the latest snapshot of host/$id} into $target"
   pbs_client "${args[@]}"
 }
 
-cmd_shell() {
-  (($# >= 2)) || die "usage: upb shell JOB ARCHIVE [SNAPSHOT]"
-  local job=$1 archive=$2 snapshot=${3:-} id
+cmd_mount() {
+  (($# >= 2)) || die "usage: upb mount JOB DIR [SNAPSHOT]"
+  local job=$1 target=$2 snapshot=${3:-} id
   prepare_pbs
   id=$(job_backup_id "$job") || exit 1
-  [[ $archive == *.* ]] || archive+=".pxar"
-  local -a args=(catalog shell "${snapshot:-host/$id}" "$archive")
+  mkdir -p "$target" || die "cannot create $target"
+  local -a args=(mount "${snapshot:-host/$id}" "$job.pxar" "$target")
+  add_ns_args args
+  add_key_args args
+  pbs_client "${args[@]}" || exit 1
+  info "mounted at $target (read-only); unmount with: umount $target"
+}
+
+cmd_shell() {
+  (($# >= 1)) || die "usage: upb shell JOB [SNAPSHOT]"
+  local job=$1 snapshot=${2:-} id
+  prepare_pbs
+  id=$(job_backup_id "$job") || exit 1
+  local -a args=(catalog shell "${snapshot:-host/$id}" "$job.pxar")
   add_ns_args args
   add_key_args args
   pbs_client "${args[@]}"
@@ -235,15 +244,15 @@ cmd_init_key() {
   ensure_client || exit 1
   mkdir -p "$(dirname "$PBS_KEYFILE")" || die "cannot create $(dirname "$PBS_KEYFILE")"
   "$PBS_CLIENT" key create "$PBS_KEYFILE" --kdf none || die "key creation failed"
-  info "created $PBS_KEYFILE"
+  chmod 600 "$PBS_KEYFILE"
+  info "created $PBS_KEYFILE; set PBS_ENCRYPTION=true in upb.conf to use it"
   echo
   echo "Paper copy of the key. Print it or store it in a password manager:"
   "$PBS_CLIENT" key paperkey "$PBS_KEYFILE" --output-format text
   cat <<EOF
 
-IMPORTANT: every backup is encrypted with this key and PBS cannot decrypt
-them. The flash backup skips the key on purpose, so if the flash drive dies
-and you have no other copy, the backups are gone. Keep a copy off this server.
+IMPORTANT: encrypted backups can only be restored with this key. Keep a copy
+somewhere other than this VM.
 EOF
 }
 
@@ -280,9 +289,9 @@ main() {
     check) cmd_check "$@" ;;
     snapshots) cmd_snapshots "$@" ;;
     restore) cmd_restore "$@" ;;
+    mount) cmd_mount "$@" ;;
     shell) cmd_shell "$@" ;;
     init-key) cmd_init_key "$@" ;;
-    install-client) cmd_install_client "$@" ;;
     client) cmd_client "$@" ;;
     version) echo "upb $UPB_VERSION" ;;
     *) die "unknown command: $cmd (see: upb --help)" ;;

@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Test double for `mountpoint -q DIR`.
+grep -qxF "${*: -1}" "${STUB_MOUNTS:?}"

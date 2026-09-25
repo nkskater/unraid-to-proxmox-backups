@@ -1,0 +1,14 @@
+[Unit]
+Description=Pull important Unraid shares into Proxmox Backup Server (upb)
+Documentation=https://github.com/nkskater/unraid-to-proxmox-backups
+Wants=network-online.target
+After=network-online.target proxmox-backup-proxy.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/upb backup
+# The first backup of a large share can take many hours.
+TimeoutStartSec=infinity
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

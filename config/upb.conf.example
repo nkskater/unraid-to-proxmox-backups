@@ -1,57 +1,61 @@
-# upb configuration: /boot/config/upb/upb.conf
+# upb configuration: /etc/upb/upb.conf on the Proxmox Backup Server VM.
 # This file is sourced by bash: write VAR="value" with no spaces around '='.
 
-# --- Proxmox Backup Server -------------------------------------------------
-# proxmox/pbs-setup.sh prints the values for this section.
+# --- Unraid ----------------------------------------------------------------
+UNRAID_HOST="192.168.1.180"
+# NFS mount options. Must include "ro". "soft" makes an unreachable Unraid
+# fail the backup (and notify you) instead of hanging it forever.
+NFS_OPTIONS="ro,soft,timeo=600,retrans=2"
+# Shares are mounted here while their backup runs, one folder per job.
+MOUNT_ROOT="/mnt/upb"
 
-# Host name or IP of the Proxmox Backup Server (e.g. "192.168.1.20").
-PBS_SERVER=""
+# --- Proxmox Backup Server -------------------------------------------------
+# upb runs on the PBS VM itself, so it talks to localhost.
+PBS_SERVER="localhost"
 PBS_PORT=8007
-# Datastore that receives the Unraid backups.
 PBS_DATASTORE="unraid"
-# Optional namespace inside the datastore. It must already exist on PBS.
+# Optional namespace inside the datastore. It must already exist.
 PBS_NAMESPACE=""
-# API token id (user@realm!token-name). Put the token secret in PBS_TOKEN_FILE.
+# API token id (user@realm!token-name). pbs-setup.sh creates it and writes its
+# secret to PBS_TOKEN_FILE.
 PBS_AUTH_ID="unraid-backup@pbs!unraid"
-PBS_TOKEN_FILE="/boot/config/upb/secrets/pbs-token"
-# SHA-256 fingerprint of the PBS certificate (PBS web UI: Dashboard > Show Fingerprint).
+PBS_TOKEN_FILE="/etc/upb/secrets/pbs-token"
+# Filled in by pbs-setup.sh (or PBS web UI: Dashboard > Show Fingerprint).
 PBS_FINGERPRINT=""
 
 # --- Encryption ------------------------------------------------------------
-# Client-side encryption: PBS only stores encrypted chunks. Create the key
-# with `upb init-key` and keep an offline copy. Without the key, the backups
-# cannot be restored.
-# Trade-off: encrypted backups can't be browsed in the PBS web UI; use
-# `upb shell` instead.
-PBS_ENCRYPTION=true
-PBS_KEYFILE="/boot/config/upb/secrets/encryption.key"
+# Off by default: the key would sit on this VM right next to the datastore, so
+# it protects little, and unencrypted backups can be browsed and downloaded in
+# the PBS web UI. Turn it on (after `upb init-key`) before you sync the
+# datastore somewhere off site.
+PBS_ENCRYPTION=false
+PBS_KEYFILE="/etc/upb/secrets/encryption.key"
 
 # --- Backup behaviour ------------------------------------------------------
 # "metadata" only re-reads files whose metadata changed since the previous
-# snapshot, which keeps nightly runs of large photo libraries fast. It needs
-# client and server 3.3 or newer; use "legacy" for older servers.
+# snapshot, which keeps nightly runs of big shares fast.
 PBS_CHANGE_DETECTION_MODE="metadata"
-# Backup groups are named host/<prefix>-<job>, e.g. host/unraid-appdata.
+# Backup groups are named host/<prefix>-<job>, e.g. host/unraid-photos.
 BACKUP_ID_PREFIX="unraid"
-# Where pre-backup hooks write database dumps (one folder per job). The latest
-# dumps are kept here, so use a pool or array share, not RAM.
-STAGING_DIR="/mnt/user/system/upb-staging"
-# Seconds docker waits for a container to stop before killing it.
-CONTAINER_STOP_TIMEOUT=60
+# For jobs with WAIT_FOR_QUIET=true: wait until nothing in the share changed
+# for QUIET_MINUTES (Appdata Backup still writing), and give up after
+# QUIET_TIMEOUT_MINUTES.
+QUIET_MINUTES=10
+QUIET_TIMEOUT_MINUTES=180
 # Extra flags added to every `proxmox-backup-client backup` call, as a bash
-# array. See `upb client help backup` for what's available.
+# array. See `upb client help backup`.
 PBS_EXTRA_ARGS=()
 
 # --- Logging and notifications ---------------------------------------------
-# /var/log is in RAM on Unraid; point this at a share to keep logs across reboots.
+# Logs also go to the journal: journalctl -u upb-backup
 LOG_DIR="/var/log/upb"
 LOG_KEEP_DAYS=30
-# Raise an Unraid notification when a backup fails. Where it goes (browser,
-# email, Discord, ...) is set in Settings > Notifications.
-NOTIFY_UNRAID=true
+# Email on failure, sent with this host's sendmail (postfix).
+NOTIFY_EMAIL=""
+# ntfy topic URL for push notifications, e.g. "https://ntfy.sh/my-backups".
+NOTIFY_NTFY_URL=""
 # Also notify when everything succeeded.
 NOTIFY_ON_SUCCESS=false
-# healthchecks.io-compatible URL. It is pinged at start, on success and on
-# failure (with the end of the log), so you also hear about runs that never
-# happened.
+# healthchecks.io-compatible URL, pinged at start, on success and on failure.
+# It also alerts you when a backup never ran at all.
 HEALTHCHECK_URL=""

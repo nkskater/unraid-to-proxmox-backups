@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Test double for umount: forgets the mount and empties the mount point.
+printf 'umount %s\n' "$*" >>"${STUB_LOG:?}"
+mnt=${*: -1}
+grep -qxF "$mnt" "${STUB_MOUNTS:?}" || exit 32
+grep -vxF "$mnt" "$STUB_MOUNTS" >"$STUB_MOUNTS.tmp" || true
+mv "$STUB_MOUNTS.tmp" "$STUB_MOUNTS"
+find "$mnt" -mindepth 1 -delete
