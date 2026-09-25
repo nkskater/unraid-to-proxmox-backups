@@ -26,9 +26,12 @@ machine's disks.
      storage that points back at Unraid (e.g. NFS to the `proxmox` share),
      or the backups would sit on the array they protect.
    - Size: see "How big a datastore" below.
-   - **Untick "Backup"**, so the Unraid PBS doesn't copy the whole
-     datastore every night. Tick *Discard* and *IO thread*.
+   - Under *Advanced*: **untick "Backup"**, so the Unraid PBS doesn't copy
+     the whole datastore every night, and tick **"Skip replication"**, so
+     cluster replication doesn't copy it to the other node. Tick *Discard*
+     and *IO thread*.
    - A whole physical disk passed through to the VM works as well.
+   - General > Advanced: tick **Start at boot**.
 4. Start the VM and install PBS onto the **32 GB disk**. Give it a static
    IP (the examples use `192.168.1.20`) and a hostname such as
    `pbs-unraid`.
