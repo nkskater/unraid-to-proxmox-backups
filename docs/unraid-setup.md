@@ -19,14 +19,19 @@ Settings > Appdata Backup:
 | Keep / delete old backups | keep **1–2** runs | PBS keeps the history and only reads the newest run. Every extra local copy is array space: the old compressed copies currently fill about 870 GB of `appdata backup` and 53 GB of `flash drive backup`. |
 | Schedule | as you like, finishing before 06:00 | The PBS VM pulls every night at 06:00 and waits if the plugin is still writing. On nights without a new plugin run, nothing changed, so the pull is quick and costs no space. PBS's appdata restore points are only as fresh as the plugin's last run. |
 | Containers | stopped during their backup (the default) | Gives consistent copies of databases (Postgres, SQLite) |
-| Per-container excluded folders | large data you can download again, e.g. Ollama's `models` folder (`/mnt/user/appdata/ollama/models`) | Downloaded LLMs can be hundreds of GB. Excluding them keeps each run small on the array and in PBS; after a restore, `ollama pull` fetches them again |
+| Global exclusion list (or a container's own exclusions: click its name) | large data you can download again, e.g. `/mnt/user/appdata/ollama/models` | Downloaded LLMs and models can be hundreds of GB. Excluding them keeps each run small on the array and in PBS; they can be downloaded again after a restore |
 
 Uncompressed runs are bigger on the array than compressed ones. Lowering the
 local retention more than makes up for it. Old compressed runs you no longer
 want can simply be deleted from the share; PBS never needed them.
 
-To see what's big before choosing exclusions:
-`du -sh /mnt/user/appdata/* | sort -h | tail -15`.
+To see what's big before choosing exclusions: the largest archives in the
+newest run (named after the containers), and the largest appdata folders:
+
+```sh
+cd "/mnt/user/Backup/appdata backup" && ls -lhS "$(ls -t | head -1)" | head -15
+du -sh /mnt/user/appdata/* | sort -h | tail -15
+```
 
 The plugin backs up the `PostgreSQL_Immich` and `postgresql17` data folders
 with those containers stopped, so they restore cleanly. A copy of a
