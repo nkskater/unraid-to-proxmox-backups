@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Test double: records each call and the credentials it received, then exits
+# with $STUB_PBS_EXIT.
+{
+  printf 'pbs'
+  printf ' %q' "$@"
+  printf '\n'
+  printf 'env PBS_REPOSITORY=%s PBS_PASSWORD=%s PBS_FINGERPRINT=%s\n' \
+    "${PBS_REPOSITORY:-}" "${PBS_PASSWORD:-}" "${PBS_FINGERPRINT:-}"
+} >>"${STUB_LOG:?}"
+[[ ${1:-} == version ]] && echo "client version: 4.0.0 (stub)"
+exit "${STUB_PBS_EXIT:-0}"

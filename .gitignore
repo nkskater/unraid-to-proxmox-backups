@@ -1,0 +1,6 @@
+# Real config and secrets live on the Unraid flash drive, never in git.
+*.key
+*.token
+secrets/
+config/upb.conf
+config/jobs.d/*.conf
