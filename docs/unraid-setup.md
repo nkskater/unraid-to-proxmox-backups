@@ -17,7 +17,7 @@ Settings > Appdata Backup:
 | Destination | `/mnt/user/Backup/appdata backup` (as now) | The `EXPORT` of the `appdata-backup` job on the PBS VM |
 | Flash drive backup | **on**, to `/mnt/user/Backup/flash drive backup` (as now) | The `flash-backup` job. Unraid config, disk assignments, Docker templates and license |
 | Keep / delete old backups | a few days (2–3 is plenty) | PBS keeps the long history; the local copies are for quick restores |
-| Schedule | daily, done well before 06:00 | The PBS VM pulls at 06:00, and waits if the plugin is still writing |
+| Schedule | as you like, finishing before 06:00 | The PBS VM pulls every night at 06:00 and waits if the plugin is still writing. On nights without a new plugin run, nothing changed, so the pull is quick and costs no space. PBS's appdata restore points are only as fresh as the plugin's last run. |
 | Containers | stopped during their backup (the default) | Gives consistent copies of databases (Postgres, SQLite) |
 
 After switching compression off, the next few runs take more disk space on
@@ -60,9 +60,8 @@ Don't export the media shares (huge, and they can be downloaded again),
 `system` (the Docker image and libvirt image; containers are rebuilt from
 the templates in the flash backup), or `pbs_data` / `proxmox`.
 
-`Backup` also holds `configs` and `zorinos`. They aren't backed up yet; add
-a job with e.g. `EXPORT="/mnt/user/Backup/zorinos"` if you want a second
-copy of them on PBS.
+Only the two Appdata Backup folders inside `Backup` are backed up; its
+other folders (`configs`, `zorinos`) are left out.
 
 To check from the PBS VM: `showmount -e 192.168.1.180` lists what Unraid
 exports and to whom. `upb check` mounts every enabled job's export.

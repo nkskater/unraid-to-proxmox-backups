@@ -4,28 +4,59 @@
 Unraid shares read-only over NFS, backs each one up into the local
 datastore with `proxmox-backup-client`, and unmounts them again.
 
-## 1. The PBS VM
+## 1. Create the PBS VM
 
-- **Datastore not on Unraid:** if the datastore lives on an Unraid share
-  (a `pbs_data` share mounted into the VM, say), these backups end up on the
-  same array they're meant to protect. One failure takes out the data and
-  its backups together. Put the datastore on disks in the Proxmox host.
-- **Datastore disk:** give the datastore its own virtual disk (or a
-  passed-through disk), separate from the VM's system disk. If the VM or
-  the cluster ever dies, attach that disk to a fresh PBS install and the
-  backups are back. Size it at roughly 1.5–2× the data you back up.
-- **Fixed IP:** the Unraid NFS rules allow exactly this address.
-- **Don't back up the PBS VM with itself.** If you back up VMs from Proxmox
-  VE to this PBS, exclude the PBS VM, or at least its datastore disk.
+This PBS runs on a **Proxmox node**, not on Unraid. The PBS VM you already
+have on Unraid (datastore on `pbs_data`) keeps backing up the Proxmox VMs;
+this one backs up Unraid. Each machine's backups then live on the other
+machine's disks.
+
+1. Download the Proxmox Backup Server ISO (proxmox.com > Downloads). In
+   Proxmox VE, upload it or use "Download from URL" on the node's `local`
+   storage > ISO Images.
+2. Create VM:
+   - **OS:** the PBS ISO
+   - **System:** defaults, tick *QEMU Agent*
+   - **Disk 1 (system):** 32 GB on SSD-backed local storage
+   - **CPU:** 2–4 cores, type `host`
+   - **Memory:** 4–8 GB
+   - **Network:** `vmbr0`, VirtIO
+3. Before starting it, Hardware > Add > Hard Disk for the **datastore**:
+   - Storage **local to the node** (local-lvm or a local ZFS pool). Never a
+     storage that points back at Unraid (e.g. NFS to the `proxmox` share),
+     or the backups would sit on the array they protect.
+   - Size: 1.5–2× the total of the shares you back up.
+   - **Untick "Backup"**, so the Unraid PBS doesn't copy the whole
+     datastore every night. Tick *Discard* and *IO thread*.
+   - A whole physical disk passed through to the VM works as well.
+4. Start the VM and install PBS onto the **32 GB disk**. Give it a static
+   IP (the examples use `192.168.1.20`) and a hostname such as
+   `pbs-unraid`.
+5. In the PBS web UI (`https://192.168.1.20:8007`):
+   - Administration > Repositories: disable *enterprise*, add
+     *no-subscription*. Then in a shell: `apt update && apt full-upgrade -y
+     && apt install -y qemu-guest-agent`.
+   - Administration > Storage / Disks > Directory > Create: pick the
+     datastore disk, filesystem ext4 or xfs, name `unraid`, tick *Add as
+     Datastore*.
+
+Keep the VM out of Proxmox HA, since its datastore disk is local to one
+node. If the VM or the node ever dies, attach the datastore disk to a
+fresh PBS install and the backups are back.
 
 ## 2. Install upb
 
-Copy this repository to the VM (`git clone`, or `scp` a download), then as
-root:
+The repository is private, so on your PC download it from GitHub
+(Code > Download ZIP, or the `.tar.gz` from the branch), copy it to the VM
+and unpack it:
 
 ```sh
-cd unraid-to-proxmox-backups
-./install.sh
+# on your PC
+scp unraid-to-proxmox-backups-*.tar.gz root@192.168.1.20:
+# on the PBS VM, as root
+tar xzf unraid-to-proxmox-backups-*.tar.gz
+cd unraid-to-proxmox-backups-*/
+bash install.sh
 ```
 
 It installs `nfs-common` if needed, puts the program in `/opt/upb` with a
@@ -38,13 +69,14 @@ enabling them. To update later, pull the new version and run
 ## 3. Prepare PBS
 
 ```sh
-# creates the datastore too, if it doesn't exist yet
-DATASTORE_PATH=/mnt/datastore/unraid ./proxmox/pbs-setup.sh
+bash proxmox/pbs-setup.sh
+# if you skipped creating the datastore in the web UI, create it here instead:
+# DATASTORE_PATH=/mnt/datastore/unraid bash proxmox/pbs-setup.sh
 ```
 
 | Creates | Default | Why |
 |---|---|---|
-| Datastore | `unraid` | Keeps Unraid data apart from VM backups |
+| Datastore | `unraid` (only if `DATASTORE_PATH` is set) | Where the Unraid backups go |
 | User + API token | `unraid-backup@pbs!unraid` | What upb logs in with; the secret is written to `/etc/upb/secrets/pbs-token` |
 | ACL | `DatastoreBackup` on `/datastore/unraid` | Can add backups, **can't delete or prune** them |
 | Prune job | daily 08:00: keep 3 last, 14 daily, 8 weekly, 12 monthly, 3 yearly | Retention, run by PBS |
@@ -67,9 +99,9 @@ notification method (below).
 To add one, create another file:
 
 ```bash
-# /etc/upb/jobs.d/70-zorinos.conf  ->  job "zorinos", group host/unraid-zorinos
+# /etc/upb/jobs.d/70-documents.conf  ->  job "documents", group host/unraid-documents
 JOB_ENABLED=true
-EXPORT="/mnt/user/Backup/zorinos"   # Unraid path; its share must be NFS-exported
+EXPORT="/mnt/user/documents"        # Unraid path; its share must be NFS-exported
 EXCLUDES=("/cache/")                # on top of COMMON_EXCLUDES in upb.conf
 WAIT_FOR_QUIET=false                # true: wait until nothing changed for QUIET_MINUTES
 ```
@@ -82,19 +114,28 @@ Each job becomes a backup group `host/unraid-<job>` holding one archive,
 ## 5. Test and schedule
 
 ```sh
-upb check              # config, token, and mounts every enabled export
-upb backup --dry-run   # the exact mount and client commands
-upb backup             # first run: reads everything, later runs only changes
-upb backup paperless   # or one job at a time
+upb check                  # config, token, and mounts every enabled export
+upb backup --dry-run       # the exact mount and client commands
+upb backup flash-backup    # a small job first, to see it work end to end
 upb snapshots
+```
 
+The first full run reads every share over the network, so `photos_immich`
+and `Everything Else` can take hours. Later runs only read what changed.
+Start it as the service, so it keeps going if your SSH session drops, and
+follow the log:
+
+```sh
+systemctl start --no-block upb-backup.service
+journalctl -fu upb-backup
+```
+
+Then turn on the nightly timer:
+
+```sh
 systemctl enable --now upb-backup.timer
 systemctl list-timers upb-backup.timer
 ```
-
-The first `upb backup` reads every share in full over the network, so
-`photos_immich` and `Everything Else` can take hours. Later runs only read
-what changed.
 
 The timer runs at 06:00. Change it with `systemctl edit upb-backup.timer`:
 

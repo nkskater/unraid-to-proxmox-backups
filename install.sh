@@ -32,6 +32,7 @@ mkdir -p "$APP_DIR.new"
 cp -r "$SRC/bin" "$SRC/lib" "$SRC/VERSION" "$APP_DIR.new/"
 rm -rf "$APP_DIR"
 mv "$APP_DIR.new" "$APP_DIR"
+chmod 0755 "$APP_DIR/bin/upb"
 ln -sf "$APP_DIR/bin/upb" /usr/local/bin/upb
 
 mkdir -p "$CONFIG_DIR/jobs.d" "$CONFIG_DIR/secrets"
