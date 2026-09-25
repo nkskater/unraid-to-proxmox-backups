@@ -20,7 +20,8 @@ Settings > Appdata Backup:
 | Schedule | as you like, finishing before 06:00 | The PBS VM pulls every night at 06:00 and waits if the plugin is still writing. On nights without a new plugin run, nothing changed, so the pull is quick and costs no space. PBS's appdata restore points are only as fresh as the plugin's last run. |
 | Containers | stopped during their backup (the default) | Gives consistent copies of databases (Postgres, SQLite) |
 | Skip? (per container) | **Yes** for containers whose data you don't need, e.g. `ComfyUI-Nvidia-Docker` (138 GB of image models) | Keeps each run small on the array and in PBS |
-| Global exclusion list (or a container's own exclusions: click its name) | large folders you can download again inside containers you do keep | Downloaded models and caches can be hundreds of GB; they can be downloaded or rebuilt after a restore |
+| (optional) model list | `docker exec ollama ollama list > /mnt/user/appdata/ollama/models-list.txt`, e.g. as a User Script | The list is backed up even though the models aren't, so you know what to `ollama pull` after a restore |
+| Excluded folders (click a container's name, or use the Global exclusion list) | large folders you can download again inside containers you do keep, e.g. `/mnt/user/appdata/ollama/models` for Ollama | Downloaded models and caches can be hundreds of GB; they can be downloaded again after a restore (`ollama pull`) |
 
 Uncompressed runs are bigger on the array than compressed ones. Lowering the
 local retention more than makes up for it. Old compressed runs you no longer
@@ -35,10 +36,10 @@ du -sh /mnt/user/appdata/* | sort -h | tail -15
 ```
 
 The plugin only backs up the folders of containers that exist. Removing a
-container in Unraid keeps its appdata folder, so folders of removed
-containers (`ollama` 217 GB, `serge`, `vllm` here) are not in the runs; delete
-them if you don't need them any more. (`ollama-webui` is still in use: it's
-Open WebUI's data folder.) To check that no container uses a folder:
+container in Unraid keeps its appdata folder (reinstalling it from Apps >
+Previous Apps picks the folder up again), so folders of removed containers
+are not in the runs. Check that no container uses a folder before deleting
+it:
 
 ```sh
 docker ps -aq | xargs docker inspect -f '{{.Name}}: {{range .Mounts}}{{.Source}} {{end}}' \
