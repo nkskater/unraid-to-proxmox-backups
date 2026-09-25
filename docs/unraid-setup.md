@@ -44,12 +44,14 @@ to the Global exclusion list (one path per line; P = `/mnt/user/appdata/Plex-Med
 |---|---|
 | `P/Cache`, `P/Codecs`, `P/Crash Reports`, `P/Diagnostics`, `P/Drivers`, `P/Logs`, `P/Updates` | Rebuilt or re-downloaded by Plex on its own |
 | `P/Media` | Video preview thumbnails and chapter images; regenerated after a restore (takes hours of CPU) |
+| `P/Plug-in Support/Caches` | Plug-in caches, rebuilt automatically |
 | `P/Metadata` (optional) | Posters and artwork; re-downloaded, but slowly, and custom posters are lost |
 | `/mnt/user/appdata/Jellyfin/cache` | Jellyfin's cache (the container's `/cache` mapping) |
+| `/mnt/user/appdata/Jellyfin/metadata` (optional) | Downloaded posters, backdrops and people images. After a restore, run a library refresh with "Replace all images"; custom images are lost |
 
-Never exclude Plex's `Plug-in Support` folder or `Preferences.xml`: they hold
-the library database (watch history, collections, settings) and the server's
-identity. To see what each Plex folder takes:
+Never exclude Plex's `Plug-in Support/Databases` folder or `Preferences.xml`,
+or Jellyfin's `data` and `config` folders: they hold the library databases
+(users, watch history, collections, settings) and the servers' identity. To see what each Plex folder takes:
 
 ```sh
 du -sh "/mnt/user/appdata/Plex-Media-Server/Library/Application Support/Plex Media Server"/* | sort -h
