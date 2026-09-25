@@ -35,6 +35,28 @@ cd "/mnt/user/Backup/appdata backup" && ls -lhS "$(ls -t | head -1)" | head -15
 du -sh /mnt/user/appdata/* | sort -h | tail -15
 ```
 
+### Plex and Jellyfin
+
+Most of a media server's appdata is caches and generated images. Add these
+to the Global exclusion list (one path per line; P = `/mnt/user/appdata/Plex-Media-Server/Library/Application Support/Plex Media Server`):
+
+| Exclude | Why it's safe |
+|---|---|
+| `P/Cache`, `P/Codecs`, `P/Crash Reports`, `P/Diagnostics`, `P/Drivers`, `P/Logs`, `P/Updates` | Rebuilt or re-downloaded by Plex on its own |
+| `P/Media` | Video preview thumbnails and chapter images; regenerated after a restore (takes hours of CPU) |
+| `P/Metadata` (optional) | Posters and artwork; re-downloaded, but slowly, and custom posters are lost |
+| `/mnt/user/appdata/Jellyfin/cache` | Jellyfin's cache (the container's `/cache` mapping) |
+
+Never exclude Plex's `Plug-in Support` folder or `Preferences.xml`: they hold
+the library database (watch history, collections, settings) and the server's
+identity. To see what each Plex folder takes:
+
+```sh
+du -sh "/mnt/user/appdata/Plex-Media-Server/Library/Application Support/Plex Media Server"/* | sort -h
+```
+
+### Removed containers
+
 The plugin only backs up the folders of containers that exist. Removing a
 container in Unraid keeps its appdata folder (reinstalling it from Apps >
 Previous Apps picks the folder up again), so folders of removed containers
