@@ -34,10 +34,16 @@ cd "/mnt/user/Backup/appdata backup" && ls -lhS "$(ls -t | head -1)" | head -15
 du -sh /mnt/user/appdata/* | sort -h | tail -15
 ```
 
-The plugin only backs up the folders of containers that exist. Folders left
-behind by removed containers (`ollama` 217 GB, `serge`, `vllm`,
-`ollama-webui` here) are not in the runs; delete them from appdata if you
-don't need them any more.
+The plugin only backs up the folders of containers that exist. Removing a
+container in Unraid keeps its appdata folder, so folders of removed
+containers (`ollama` 217 GB, `serge`, `vllm` here) are not in the runs; delete
+them if you don't need them any more. (`ollama-webui` is still in use: it's
+Open WebUI's data folder.) To check that no container uses a folder:
+
+```sh
+docker ps -aq | xargs docker inspect -f '{{.Name}}: {{range .Mounts}}{{.Source}} {{end}}' \
+  | grep -E 'appdata/ollama(/| |$)'
+```
 
 The plugin backs up the `PostgreSQL_Immich` and `postgresql17` data folders
 with those containers stopped, so they restore cleanly. A copy of a
