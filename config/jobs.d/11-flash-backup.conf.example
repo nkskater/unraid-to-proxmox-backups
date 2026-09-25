@@ -3,5 +3,8 @@
 JOB_ENABLED=true
 EXPORT="/mnt/user/Backup/flash drive backup"
 
+# One copy per plugin run; only the newest is needed (PBS keeps the history).
+ONLY_NEWEST=1
+
 # Written by the same plugin run as the appdata archives.
 WAIT_FOR_QUIET=true

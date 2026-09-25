@@ -16,13 +16,13 @@ Settings > Appdata Backup:
 | **Compression** | **No** | Compressed archives change completely every night, so PBS can't deduplicate them and stores every night in full. Uncompressed tars deduplicate well, and PBS compresses chunks itself. |
 | Destination | `/mnt/user/Backup/appdata backup` (as now) | The `EXPORT` of the `appdata-backup` job on the PBS VM |
 | Flash drive backup | **on**, to `/mnt/user/Backup/flash drive backup` (as now) | The `flash-backup` job. Unraid config, disk assignments, Docker templates and license |
-| Keep / delete old backups | a few days (2–3 is plenty) | PBS keeps the long history; the local copies are for quick restores |
+| Keep / delete old backups | keep **1–2** runs | PBS keeps the history and only reads the newest run. Every extra local copy is array space: the old compressed copies currently fill about 870 GB of `appdata backup` and 53 GB of `flash drive backup`. |
 | Schedule | as you like, finishing before 06:00 | The PBS VM pulls every night at 06:00 and waits if the plugin is still writing. On nights without a new plugin run, nothing changed, so the pull is quick and costs no space. PBS's appdata restore points are only as fresh as the plugin's last run. |
 | Containers | stopped during their backup (the default) | Gives consistent copies of databases (Postgres, SQLite) |
 
-After switching compression off, the next few runs take more disk space on
-the share (uncompressed tars next to the old compressed ones) until the old
-ones age out.
+Uncompressed runs are bigger on the array than compressed ones. Lowering the
+local retention more than makes up for it. Old compressed runs you no longer
+want can simply be deleted from the share; PBS never needed them.
 
 The plugin backs up the `PostgreSQL_Immich` and `postgresql17` data folders
 with those containers stopped, so they restore cleanly. A copy of a

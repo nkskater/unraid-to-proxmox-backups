@@ -4,6 +4,10 @@
 JOB_ENABLED=true
 EXPORT="/mnt/user/Backup/appdata backup"
 
-# The plugin writes here for a while each night. Wait until it has finished,
-# so a half-written archive is never captured.
+# The plugin keeps a dated folder per run. Only the newest run is read: PBS
+# keeps the history itself, and the older folders are just older copies.
+ONLY_NEWEST=1
+
+# The plugin writes here for a while each run. Wait until it has finished, so
+# a half-written archive is never captured.
 WAIT_FOR_QUIET=true

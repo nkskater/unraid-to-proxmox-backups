@@ -35,6 +35,38 @@ EXCLUDES=("/tmp/")'
   [[ ${lines[1]} == *'--exclude \*\*/.DS_Store --exclude \*\*/.Recycle.Bin/ --exclude /tmp/' ]]
 }
 
+@test "ONLY_NEWEST backs up just the most recent runs of a folder" {
+  runs="$STUB_EXPORTS/mnt/user/Backup/appdata backup"
+  mkdir -p "$runs/ab_20260901" "$runs/ab_20260915" "$runs/ab_20260922" "$runs/odd[1]*"
+  for d in "$runs"/*; do echo x >"$d/archive.tar"; done
+  touch -d '4 hours ago' "$runs/odd[1]*" "$runs/odd[1]*/archive.tar"
+  touch -d '3 hours ago' "$runs/ab_20260901" "$runs/ab_20260901/archive.tar"
+  touch -d '2 hours ago' "$runs/ab_20260915" "$runs/ab_20260915/archive.tar"
+  touch -d '1 hour ago' "$runs/ab_20260922" "$runs/ab_20260922/archive.tar"
+  add_job 10-appdata-backup.conf 'EXPORT="/mnt/user/Backup/appdata backup"
+ONLY_NEWEST=1'
+
+  run upb backup
+  [ "$status" -eq 0 ]
+  [[ $output == *"backing up the newest 1 of 4 entries: ab_20260922"* ]]
+  run calls "pbs backup"
+  [[ $output == *'--exclude /odd\\\[1\\\]\\\* --exclude /ab_20260901 --exclude /ab_20260915' ]]
+  [[ $output != *"--exclude /ab_20260922"* ]]
+
+  : >"$STUB_LOG"
+  sed -i 's/ONLY_NEWEST=1/ONLY_NEWEST=2/' "$UPB_CONFIG_DIR/jobs.d/10-appdata-backup.conf"
+  run upb backup
+  run calls "pbs backup"
+  [[ $output == *'--exclude /ab_20260901' ]]
+  [[ $output != *"--exclude /ab_20260915"* ]]
+
+  : >"$STUB_LOG"
+  sed -i 's/ONLY_NEWEST=2/ONLY_NEWEST=9/' "$UPB_CONFIG_DIR/jobs.d/10-appdata-backup.conf"
+  run upb backup
+  run calls "pbs backup"
+  [[ $output != *"--exclude"* ]]
+}
+
 @test "credentials go through the environment, never the command line" {
   add_job 10-docs.conf 'EXPORT=/mnt/user/docs'
 
@@ -197,13 +229,15 @@ EOF
 
 @test "invalid jobs are rejected before mounting" {
   add_job 10-bad.name.conf 'EXPORT=/mnt/user/docs'
-  add_job 20-noexport.conf 'WAIT_FOR_QUIET=maybe'
+  add_job 20-noexport.conf 'WAIT_FOR_QUIET=maybe
+ONLY_NEWEST=latest'
 
   run upb backup
   [ "$status" -eq 1 ]
   [[ $output == *"[bad.name] job names"* ]]
   [[ $output == *"[noexport] EXPORT must be the absolute Unraid path"* ]]
   [[ $output == *"WAIT_FOR_QUIET must be true or false"* ]]
+  [[ $output == *"ONLY_NEWEST must be a number"* ]]
   [ -z "$(calls 'mount')" ]
 }
 

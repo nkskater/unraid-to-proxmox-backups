@@ -25,7 +25,7 @@ machine's disks.
    - Storage **local to the node** (local-lvm or a local ZFS pool). Never a
      storage that points back at Unraid (e.g. NFS to the `proxmox` share),
      or the backups would sit on the array they protect.
-   - Size: 1.5–2× the total of the shares you back up.
+   - Size: see "How big a datastore" below.
    - **Untick "Backup"**, so the Unraid PBS doesn't copy the whole
      datastore every night. Tick *Discard* and *IO thread*.
    - A whole physical disk passed through to the VM works as well.
@@ -39,6 +39,20 @@ machine's disks.
    - Administration > Storage / Disks > Directory > Create: pick the
      datastore disk, filesystem ext4 or xfs, name `unraid`, tick *Add as
      Datastore*.
+
+### How big a datastore
+
+Count what PBS actually stores, not what the Unraid folders hold:
+
+- the shares as they are (`photos_immich`, `Everything Else`, `paperless`,
+  `sftpgo`, `syncthing backup`),
+- **one** Appdata Backup run and **one** flash backup (`ONLY_NEWEST=1`),
+  not the whole folders, which hold many old copies,
+
+and multiply by about 1.5 for history. PBS compresses and deduplicates, so
+the history costs only what changes between runs. The PBS web UI shows
+the real usage once the first backups are in; the disk can be grown later
+(resize it in Proxmox, then grow the filesystem in the VM).
 
 Keep the VM out of Proxmox HA, since its datastore disk is local to one
 node. If the VM or the node ever dies, attach the datastore disk to a
@@ -104,6 +118,7 @@ JOB_ENABLED=true
 EXPORT="/mnt/user/documents"        # Unraid path; its share must be NFS-exported
 EXCLUDES=("/cache/")                # on top of COMMON_EXCLUDES in upb.conf
 WAIT_FOR_QUIET=false                # true: wait until nothing changed for QUIET_MINUTES
+ONLY_NEWEST=0                       # N: only the N newest top-level entries (0 = all)
 ```
 
 Share names with spaces are fine in `EXPORT`; keep them inside the quotes.

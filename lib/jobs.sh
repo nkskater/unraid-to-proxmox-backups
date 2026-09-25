@@ -43,6 +43,7 @@ load_job() {
   EXPORT=""
   EXCLUDES=()
   WAIT_FOR_QUIET=false
+  ONLY_NEWEST=0
   BACKUP_ID=""
 
   JOB_NAME=$(job_name "$1")
@@ -90,11 +91,49 @@ validate_job() {
       rc=1
       ;;
   esac
+  if [[ ! $ONLY_NEWEST =~ ^[0-9]+$ ]]; then
+    error "[$JOB_NAME] ONLY_NEWEST must be a number (0 = back up everything)"
+    rc=1
+  fi
   return "$rc"
 }
 
+# Escapes glob characters so a file name matches only itself in an exclude pattern.
+escape_pattern() {
+  local s=$1 c out="" i
+  for ((i = 0; i < ${#s}; i++)); do
+    c=${s:i:1}
+    case $c in
+      '*' | '?' | '[' | ']' | \\) out+="\\$c" ;;
+      *) out+=$c ;;
+    esac
+  done
+  printf '%s' "$out"
+}
+
+# With ONLY_NEWEST=N, adds excludes for all but the N most recently modified
+# top-level entries of the mounted export. For folders that collect one copy
+# per run (Appdata Backup): PBS keeps the history, so only the newest run needs
+# to be read.
+exclude_older_entries() {
+  local -a entries=()
+  local count i
+  if dry_run; then
+    info "[$JOB_NAME] [dry-run] would back up only the newest $ONLY_NEWEST entries"
+    return 0
+  fi
+  mapfile -d '' -t entries < <(find "$JOB_MOUNT" -mindepth 1 -maxdepth 1 -printf '%T@\t%f\0' |
+    sort -z -n | cut -z -f2-)
+  count=${#entries[@]}
+  ((count > ONLY_NEWEST)) || return 0
+  for ((i = 0; i < count - ONLY_NEWEST; i++)); do
+    EXCLUDES+=("/$(escape_pattern "${entries[i]}")")
+  done
+  info "[$JOB_NAME] backing up the newest $ONLY_NEWEST of $count entries: ${entries[*]:count-ONLY_NEWEST}"
+}
+
 # Runs one job: mount the export read-only, optionally wait for writes to
-# settle, back it up, unmount. Call it in its own subshell: it sources the job
+# settle and skip older runs, back it up, unmount. Call it in its own subshell: it sources the job
 # file and sets traps.
 run_job() {
   local rc
@@ -108,6 +147,9 @@ run_job() {
   mount_export "$EXPORT" "$JOB_MOUNT" || return 1
   if [[ $WAIT_FOR_QUIET == true ]]; then
     wait_for_quiet "$JOB_MOUNT" || return 1
+  fi
+  if ((ONLY_NEWEST > 0)); then
+    exclude_older_entries
   fi
 
   info "[$JOB_NAME] backing up $UNRAID_HOST:$EXPORT to host/$BACKUP_ID"

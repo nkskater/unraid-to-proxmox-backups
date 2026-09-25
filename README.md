@@ -59,8 +59,8 @@ group `host/unraid-<job>` on PBS:
 
 | Job | Unraid folder | Contents |
 |---|---|---|
-| `appdata-backup` | `Backup/appdata backup` | Appdata Backup archives: every container's appdata, Postgres included, taken stopped |
-| `flash-backup` | `Backup/flash drive backup` | Appdata Backup's flash drive backups |
+| `appdata-backup` | `Backup/appdata backup` | Newest Appdata Backup run: every container's appdata, Postgres included, taken stopped |
+| `flash-backup` | `Backup/flash drive backup` | Newest flash drive backup |
 | `photos-immich` | `photos_immich` | Immich library, without thumbnails and transcoded video |
 | `paperless` | `paperless` | Paperless-ngx documents |
 | `everything-else` | `Everything Else` | |
