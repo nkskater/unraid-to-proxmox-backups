@@ -35,10 +35,11 @@ cd "/mnt/user/Backup/appdata backup" && ls -lhS "$(ls -t | head -1)" | head -15
 du -sh /mnt/user/appdata/* | sort -h | tail -15
 ```
 
-### Plex and Jellyfin
+### Plex, Jellyfin and other big containers
 
-Most of a media server's appdata is caches and generated images. Add these
-to the Global exclusion list (one path per line; P = `/mnt/user/appdata/Plex-Media-Server/Library/Application Support/Plex Media Server`):
+Most of a media server's appdata is caches and generated images. Exclude
+these per container (click its name and tick the folders) or in the Global
+exclusion list (one path per line; P = `/mnt/user/appdata/Plex-Media-Server/Library/Application Support/Plex Media Server`):
 
 | Exclude | Why it's safe |
 |---|---|
@@ -48,9 +49,11 @@ to the Global exclusion list (one path per line; P = `/mnt/user/appdata/Plex-Med
 | `P/Metadata` (optional) | Posters and artwork; re-downloaded, but slowly, and custom posters are lost |
 | `/mnt/user/appdata/Jellyfin/cache` | Jellyfin's cache (the container's `/cache` mapping) |
 | `/mnt/user/appdata/Jellyfin/metadata` (optional) | Downloaded posters, backdrops and people images. After a restore, run a library refresh with "Replace all images"; custom images are lost |
+| `MediaCover` in the *arr apps' appdata (lidarr, radarr, sonarr, …) | Posters the apps download again |
+| `cache` in Open WebUI's appdata (`ollama-webui` here) | Downloaded embedding and speech models; keep `webui.db` and `uploads` |
 
 Never exclude Plex's `Plug-in Support/Databases` folder or `Preferences.xml`,
-or Jellyfin's `data` and `config` folders: they hold the library databases
+or Jellyfin's `data`, `config` and `root` (library definitions) folders: they hold the library databases
 (users, watch history, collections, settings) and the servers' identity. To see what each Plex folder takes:
 
 ```sh
