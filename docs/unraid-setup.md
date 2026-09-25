@@ -19,7 +19,7 @@ Settings > Appdata Backup:
 | Keep / delete old backups | keep **1–2** runs | PBS keeps the history and only reads the newest run. Every extra local copy is array space: the old compressed copies currently fill about 870 GB of `appdata backup` and 53 GB of `flash drive backup`. |
 | Schedule | as you like, finishing before 06:00 | The PBS VM pulls every night at 06:00 and waits if the plugin is still writing. On nights without a new plugin run, nothing changed, so the pull is quick and costs no space. PBS's appdata restore points are only as fresh as the plugin's last run. |
 | Containers | stopped during their backup (the default) | Gives consistent copies of databases (Postgres, SQLite) |
-| Skip? (per container) | **Yes** for containers whose data you don't need, e.g. `ComfyUI-Nvidia-Docker` (138 GB of image models) | Keeps each run small on the array and in PBS |
+| Skip? (per container) | **Yes** for containers whose data you don't need, e.g. `ComfyUI-Nvidia-Docker` (138 GB of image models), and for the ones the plugin log reports as "does not have any volume to back up" | Keeps each run small on the array and in PBS, and stops containers without data from being restarted for nothing |
 | (optional) model list | `docker exec ollama ollama list > /mnt/user/appdata/ollama/models-list.txt`, e.g. as a User Script | The list is backed up even though the models aren't, so you know what to `ollama pull` after a restore |
 | Excluded folders (click a container's name, or use the Global exclusion list) | large folders you can download again inside containers you do keep, e.g. `/mnt/user/appdata/ollama/models` for Ollama | Downloaded models and caches can be hundreds of GB; they can be downloaded again after a restore (`ollama pull`) |
 

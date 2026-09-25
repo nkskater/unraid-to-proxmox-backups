@@ -53,8 +53,8 @@ Count what PBS actually stores, not what the Unraid folders hold:
   not the whole folders, which hold many old copies,
 
 and multiply by about 1.5 for history. For this server: ~170 GB of shares
-+ ~125 GB for one appdata run without Ollama and ComfyUI + ~2 GB flash ≈
-300 GB, so a **500 GB** datastore disk leaves room to grow. PBS compresses and deduplicates, so
++ ~40 GB for one appdata run (after the exclusions) + ~2 GB flash ≈
+210 GB, so a **400–500 GB** datastore disk leaves plenty of room to grow. PBS compresses and deduplicates, so
 the history costs only what changes between runs. The PBS web UI shows
 the real usage once the first backups are in; the disk can be grown later
 (resize it in Proxmox, then grow the filesystem in the VM).
