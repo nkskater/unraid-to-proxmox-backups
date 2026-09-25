@@ -20,6 +20,21 @@ EXCLUDES=("*.tmp" "/cache/")'
   [ ! -s "$STUB_MOUNTS" ]
 }
 
+@test "share names with spaces work, and common excludes come before the job's" {
+  mkdir -p "$STUB_EXPORTS/mnt/user/Everything Else"
+  echo "x" >"$STUB_EXPORTS/mnt/user/Everything Else/file"
+  echo 'COMMON_EXCLUDES=("**/.DS_Store" "**/.Recycle.Bin/")' >>"$UPB_CONFIG_DIR/upb.conf"
+  add_job 40-everything-else.conf 'EXPORT="/mnt/user/Everything Else"
+EXCLUDES=("/tmp/")'
+
+  run upb backup
+  [ "$status" -eq 0 ]
+  run grep -E '^(mount|pbs backup)' "$STUB_LOG"
+  [ "${lines[0]}" = "mount -t nfs -o ro,soft,timeo=600,retrans=2 unraid.test:/mnt/user/Everything Else $MNT/everything-else" ]
+  [[ ${lines[1]} == "pbs backup everything-else.pxar:$MNT/everything-else --backup-type host --backup-id unraid-everything-else "* ]]
+  [[ ${lines[1]} == *'--exclude \*\*/.DS_Store --exclude \*\*/.Recycle.Bin/ --exclude /tmp/' ]]
+}
+
 @test "credentials go through the environment, never the command line" {
   add_job 10-docs.conf 'EXPORT=/mnt/user/docs'
 
@@ -314,7 +329,10 @@ EXPORT=/mnt/user/nowhere'
   done
   run upb list
   [ "$status" -eq 0 ]
-  [[ $output == *"appdata-backup"*"true"*"host/unraid-appdata-backup"*"192.168.1.180:/mnt/user/backups/appdata"* ]]
-  [[ $output == *"photos"*"false"* ]]
-  [[ $output == *"documents"*"false"* ]]
+  [ "${#lines[@]}" -eq 8 ]
+  [[ $output == *"appdata-backup"*"true"*"host/unraid-appdata-backup"*"192.168.1.180:/mnt/user/Backup/appdata backup"* ]]
+  [[ $output == *"flash-backup"*"true"*"192.168.1.180:/mnt/user/Backup/flash drive backup"* ]]
+  [[ $output == *"photos-immich"*"true"*"192.168.1.180:/mnt/user/photos_immich"* ]]
+  [[ $output == *"everything-else"*"true"*"192.168.1.180:/mnt/user/Everything Else"* ]]
+  [[ $output == *"syncthing-backup"*"true"*"192.168.1.180:/mnt/user/syncthing backup"* ]]
 }

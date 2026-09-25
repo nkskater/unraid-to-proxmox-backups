@@ -1,0 +1,7 @@
+# Appdata Backup plugin's flash drive backups: Unraid config, disk
+# assignments, Docker templates, plugins and license.
+JOB_ENABLED=true
+EXPORT="/mnt/user/Backup/flash drive backup"
+
+# Written by the same plugin run as the appdata archives.
+WAIT_FOR_QUIET=true

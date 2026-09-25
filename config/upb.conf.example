@@ -35,13 +35,19 @@ PBS_KEYFILE="/etc/upb/secrets/encryption.key"
 # "metadata" only re-reads files whose metadata changed since the previous
 # snapshot, which keeps nightly runs of big shares fast.
 PBS_CHANGE_DETECTION_MODE="metadata"
-# Backup groups are named host/<prefix>-<job>, e.g. host/unraid-photos.
+# Backup groups are named host/<prefix>-<job>, e.g. host/unraid-paperless.
 BACKUP_ID_PREFIX="unraid"
 # For jobs with WAIT_FOR_QUIET=true: wait until nothing in the share changed
 # for QUIET_MINUTES (Appdata Backup still writing), and give up after
 # QUIET_TIMEOUT_MINUTES.
 QUIET_MINUTES=10
 QUIET_TIMEOUT_MINUTES=180
+# Excluded from every job, on top of each job's own EXCLUDES. gitignore-style
+# patterns: "**" matches any depth, a trailing "/" matches directories only.
+COMMON_EXCLUDES=(
+  "**/.DS_Store"
+  "**/.Recycle.Bin/"
+)
 # Extra flags added to every `proxmox-backup-client backup` call, as a bash
 # array. See `upb client help backup`.
 PBS_EXTRA_ARGS=()

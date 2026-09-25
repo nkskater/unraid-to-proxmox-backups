@@ -14,10 +14,10 @@ Settings > Appdata Backup:
 | Setting | Use | Why |
 |---|---|---|
 | **Compression** | **No** | Compressed archives change completely every night, so PBS can't deduplicate them and stores every night in full. Uncompressed tars deduplicate well, and PBS compresses chunks itself. |
-| Destination | a folder in a share, e.g. `/mnt/user/backups/appdata` | This is the `EXPORT` of the `appdata-backup` job on the PBS VM |
-| Flash drive backup | **on** | Unraid config, disk assignments, Docker templates and license go along |
+| Destination | `/mnt/user/Backup/appdata backup` (as now) | The `EXPORT` of the `appdata-backup` job on the PBS VM |
+| Flash drive backup | **on**, to `/mnt/user/Backup/flash drive backup` (as now) | The `flash-backup` job. Unraid config, disk assignments, Docker templates and license |
 | Keep / delete old backups | a few days (2–3 is plenty) | PBS keeps the long history; the local copies are for quick restores |
-| Schedule | e.g. daily 03:00 | Finishes before the PBS VM pulls at 05:00 |
+| Schedule | daily, done well before 06:00 | The PBS VM pulls at 06:00, and waits if the plugin is still writing |
 | Containers | stopped during their backup (the default) | Gives consistent copies of databases (Postgres, SQLite) |
 
 After switching compression off, the next few runs take more disk space on
@@ -47,13 +47,22 @@ version**; Immich's own dumps (below) don't have that limit.
 
 Shares to export:
 
-| Share | For job | Notes |
-|---|---|---|
-| the one holding the Appdata Backup destination (e.g. `backups`) | `appdata-backup` | required |
-| the Immich library (host path of `/photos`, e.g. `photos`) | `photos` | Immich also writes nightly database dumps into `backups/` there |
-| documents, Syncthing folders, … | one job each | optional |
+| Share | For jobs |
+|---|---|
+| `Backup` | `appdata-backup`, `flash-backup` (its subfolders are mounted) |
+| `photos_immich` | `photos-immich` |
+| `paperless` | `paperless` |
+| `Everything Else` | `everything-else` |
+| `sftpgo` | `sftpgo` |
+| `syncthing backup` | `syncthing-backup` |
 
-Leave the media shares out: they're huge and can be downloaded again.
+Don't export the media shares (huge, and they can be downloaded again),
+`system` (the Docker image and libvirt image; containers are rebuilt from
+the templates in the flash backup), or `pbs_data` / `proxmox`.
+
+`Backup` also holds `configs` and `zorinos`. They aren't backed up yet; add
+a job with e.g. `EXPORT="/mnt/user/Backup/zorinos"` if you want a second
+copy of them on PBS.
 
 To check from the PBS VM: `showmount -e 192.168.1.180` lists what Unraid
 exports and to whom. `upb check` mounts every enabled job's export.

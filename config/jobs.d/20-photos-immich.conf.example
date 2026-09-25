@@ -1,0 +1,12 @@
+# Immich library (the share mapped to /photos in the immich container):
+# originals, uploads, profile pictures and Immich's own nightly database
+# dumps in backups/. The first run reads the whole library; after that only
+# changes are read.
+JOB_ENABLED=true
+EXPORT="/mnt/user/photos_immich"
+
+EXCLUDES=(
+  # Immich regenerates both of these.
+  "/thumbs/"
+  "/encoded-video/"
+)

@@ -11,17 +11,17 @@ installed on Unraid, and Unraid holds no credentials.
 ```mermaid
 flowchart LR
   subgraph Unraid
-    ab["Appdata Backup plugin<br/>03:00, containers stopped,<br/>uncompressed tars + flash"] --> share[("backups share")]
-    photos[("photos share")]
+    ab["Appdata Backup plugin<br/>containers stopped,<br/>uncompressed tars + flash"] --> share[("Backup share")]
+    shares[("photos_immich, paperless,<br/>Everything Else, sftpgo,<br/>syncthing backup")]
   end
   subgraph PBS["PBS VM"]
-    timer["systemd timer 05:00"] --> upb["upb backup"]
+    timer["systemd timer 06:00"] --> upb["upb backup"]
     upb --> client["proxmox-backup-client"]
     client --> ds[("datastore: unraid")]
     ds --> jobs["prune · verify · GC"]
   end
   share -- "NFS, read-only" --> upb
-  photos -- "NFS, read-only" --> upb
+  shares -- "NFS, read-only" --> upb
 ```
 
 ## Why this design
@@ -57,19 +57,25 @@ What that gives you:
 Each job in `/etc/upb/jobs.d/` names one Unraid folder and becomes a backup
 group `host/unraid-<job>` on PBS:
 
-| Job | Enabled | Unraid folder |
+| Job | Unraid folder | Contents |
 |---|---|---|
-| `appdata-backup` | yes | Appdata Backup plugin destination: appdata of every container (Postgres included, taken stopped) and the flash drive |
-| `photos` | after you check the path | Immich library, without thumbnails and transcoded video |
-| `documents` | template | copy it once per extra share |
+| `appdata-backup` | `Backup/appdata backup` | Appdata Backup archives: every container's appdata, Postgres included, taken stopped |
+| `flash-backup` | `Backup/flash drive backup` | Appdata Backup's flash drive backups |
+| `photos-immich` | `photos_immich` | Immich library, without thumbnails and transcoded video |
+| `paperless` | `paperless` | Paperless-ngx documents |
+| `everything-else` | `Everything Else` | |
+| `sftpgo` | `sftpgo` | |
+| `syncthing-backup` | `syncthing backup` | |
 
-The media library stays out on purpose. It's most of the array, and it can
-be downloaded again.
+To add a share, drop another file in `jobs.d/`. Left out on purpose: the
+media shares (huge, and they can be downloaded again), `system` (the Docker
+image, rebuilt from the templates on the flash drive), and `pbs_data` /
+`proxmox` (backup storage, not data to back up).
 
 ## Setup
 
-1. **Unraid**: turn off compression in Appdata Backup, then export its
-   destination share (and the photos share) over NFS, read-only, to the PBS
+1. **Unraid**: turn off compression in Appdata Backup, then export the
+   `Backup` share and the other shares above over NFS, read-only, to the PBS
    VM's IP. See [docs/unraid-setup.md](docs/unraid-setup.md).
 2. **PBS VM**: run `./install.sh`, `./proxmox/pbs-setup.sh`, review
    `/etc/upb/`, then:

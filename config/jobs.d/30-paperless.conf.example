@@ -1,0 +1,4 @@
+# Paperless-ngx documents. Its database lives in appdata and comes along
+# with the appdata-backup job.
+JOB_ENABLED=true
+EXPORT="/mnt/user/paperless"

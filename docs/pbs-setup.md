@@ -6,6 +6,10 @@ datastore with `proxmox-backup-client`, and unmounts them again.
 
 ## 1. The PBS VM
 
+- **Datastore not on Unraid:** if the datastore lives on an Unraid share
+  (a `pbs_data` share mounted into the VM, say), these backups end up on the
+  same array they're meant to protect. One failure takes out the data and
+  its backups together. Put the datastore on disks in the Proxmox host.
 - **Datastore disk:** give the datastore its own virtual disk (or a
   passed-through disk), separate from the VM's system disk. If the VM or
   the cluster ever dies, attach that disk to a fresh PBS install and the
@@ -57,22 +61,20 @@ script. Re-running it is safe.
 `/etc/upb/upb.conf`: check `UNRAID_HOST` (`192.168.1.180`) and set a
 notification method (below).
 
-`/etc/upb/jobs.d/`: one file per Unraid folder.
-
-- `10-appdata-backup.conf`: set `EXPORT` to the Appdata Backup destination.
-  Enabled.
-- `20-photos.conf`: the Immich library. Check `EXPORT`, then set
-  `JOB_ENABLED=true`.
-- `90-documents.conf`: copy it once per extra share.
-
-A job file looks like this:
+`/etc/upb/jobs.d/`: one file per Unraid folder. It comes with jobs for
+`Backup/appdata backup`, `Backup/flash drive backup`, `photos_immich`,
+`paperless`, `Everything Else`, `sftpgo` and `syncthing backup`, all enabled.
+To add one, create another file:
 
 ```bash
+# /etc/upb/jobs.d/70-zorinos.conf  ->  job "zorinos", group host/unraid-zorinos
 JOB_ENABLED=true
-EXPORT="/mnt/user/photos"        # Unraid path; its share must be NFS-exported
-EXCLUDES=("/thumbs/" "/encoded-video/")
-WAIT_FOR_QUIET=false             # true: wait until nothing changed for QUIET_MINUTES
+EXPORT="/mnt/user/Backup/zorinos"   # Unraid path; its share must be NFS-exported
+EXCLUDES=("/cache/")                # on top of COMMON_EXCLUDES in upb.conf
+WAIT_FOR_QUIET=false                # true: wait until nothing changed for QUIET_MINUTES
 ```
+
+Share names with spaces are fine in `EXPORT`; keep them inside the quotes.
 
 Each job becomes a backup group `host/unraid-<job>` holding one archive,
 `<job>.pxar`.
@@ -83,13 +85,18 @@ Each job becomes a backup group `host/unraid-<job>` holding one archive,
 upb check              # config, token, and mounts every enabled export
 upb backup --dry-run   # the exact mount and client commands
 upb backup             # first run: reads everything, later runs only changes
+upb backup paperless   # or one job at a time
 upb snapshots
 
 systemctl enable --now upb-backup.timer
 systemctl list-timers upb-backup.timer
 ```
 
-The timer runs at 05:00. Change it with `systemctl edit upb-backup.timer`:
+The first `upb backup` reads every share in full over the network, so
+`photos_immich` and `Everything Else` can take hours. Later runs only read
+what changed.
+
+The timer runs at 06:00. Change it with `systemctl edit upb-backup.timer`:
 
 ```ini
 [Timer]

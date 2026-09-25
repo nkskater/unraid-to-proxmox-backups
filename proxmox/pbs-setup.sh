@@ -19,7 +19,7 @@ TOKEN_NAME="${TOKEN_NAME:-unraid}"
 UPB_CONF="${UPB_CONF:-/etc/upb/upb.conf}"
 TOKEN_FILE="${TOKEN_FILE:-/etc/upb/secrets/pbs-token}"
 
-# Retention, applied by PBS after the nightly backup (upb runs at 05:00).
+# Retention, applied by PBS after the nightly backup (upb runs at 06:00).
 PRUNE_SCHEDULE="${PRUNE_SCHEDULE:-08:00}"
 KEEP_LAST="${KEEP_LAST:-3}"
 KEEP_DAILY="${KEEP_DAILY:-14}"

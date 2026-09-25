@@ -9,7 +9,7 @@ share).
 
 ```sh
 upb snapshots                  # everything
-upb snapshots appdata-backup   # host/unraid-appdata-backup/2026-09-25T05:00:12Z ...
+upb snapshots appdata-backup   # host/unraid-appdata-backup/2026-09-25T06:00:12Z ...
 ```
 
 Commands use the **latest** snapshot unless you pass one of these paths as
@@ -24,8 +24,8 @@ there you can download single files, or whole folders as an archive.
 On the command line:
 
 ```sh
-upb shell photos                 # interactive: cd, ls, find, select, restore-selected
-upb mount photos /mnt/restore    # whole backup as a read-only folder
+upb shell photos-immich                 # interactive: cd, ls, find, select, restore-selected
+upb mount photos-immich /mnt/restore    # whole backup as a read-only folder
 umount /mnt/restore
 ```
 
@@ -35,9 +35,9 @@ Mount the backup on the PBS VM and `rsync` it to Unraid. Nothing needs to
 fit on the PBS VM's own disk:
 
 ```sh
-upb mount photos /mnt/restore
+upb mount photos-immich /mnt/restore
 rsync -a --info=progress2 /mnt/restore/library/ \
-  root@192.168.1.180:/mnt/user/photos-restore/library/
+  root@192.168.1.180:/mnt/user/photos_immich-restore/library/
 umount /mnt/restore
 ```
 
@@ -54,7 +54,7 @@ instead.
    run you want.
 2. Copy that dated folder back into the plugin's destination on Unraid:
    ```sh
-   rsync -a /mnt/restore/<dated-folder> root@192.168.1.180:/mnt/user/backups/appdata/
+   rsync -a /mnt/restore/<dated-folder> "root@192.168.1.180:/mnt/user/Backup/appdata\ backup/"
    ```
 3. On Unraid: Settings > Appdata Backup > Restore, pick that backup and the
    containers to restore. The plugin stops and starts them for you.
@@ -65,12 +65,12 @@ instead.
   the Appdata Backup archive of `PostgreSQL_Immich` holds its data folder.
   Follow Immich's guide:
   <https://immich.app/docs/administration/backup-and-restore>.
-- Library: `upb mount photos …` and `rsync` it back as shown above.
+- Library: `upb mount photos-immich …` and `rsync` it back as shown above.
   Thumbnails and transcoded videos weren't backed up; Immich regenerates
   them (Administration > Jobs).
 
-**Flash drive / whole server**: the flash backup is in the
-`appdata-backup` snapshots with the plugin's other output.
+**Flash drive / whole server**: the flash backups are in the
+`flash-backup` snapshots.
 
 1. Download it through the web UI's File Browser.
 2. Make a new USB stick with the Unraid USB Creator.

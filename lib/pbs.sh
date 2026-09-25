@@ -43,7 +43,7 @@ pbs_client() {
   )
 }
 
-# pbs_backup <backup-id> <name.pxar:/path>... — uses the job's EXCLUDES.
+# pbs_backup <backup-id> <name.pxar:/path>... — uses COMMON_EXCLUDES and the job's EXCLUDES.
 pbs_backup() {
   local backup_id=$1 pattern
   shift
@@ -58,7 +58,7 @@ pbs_backup() {
   if [[ -n $PBS_CHANGE_DETECTION_MODE ]]; then
     args+=(--change-detection-mode "$PBS_CHANGE_DETECTION_MODE")
   fi
-  for pattern in "${EXCLUDES[@]}"; do args+=(--exclude "$pattern"); done
+  for pattern in "${COMMON_EXCLUDES[@]}" "${EXCLUDES[@]}"; do args+=(--exclude "$pattern"); done
   args+=("${PBS_EXTRA_ARGS[@]}")
   pbs_client "${args[@]}"
 }
