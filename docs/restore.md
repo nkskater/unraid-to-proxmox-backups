@@ -18,8 +18,10 @@ the last argument.
 ## Browsing
 
 The easiest way, with encryption off (the default): PBS web UI >
-Datastore `unraid` > Content > pick a snapshot > **File Browser**. From
-there you can download single files, or whole folders as an archive.
+Datastore `unraid` > Content > expand the group and the snapshot, then click
+the **folder icon** in the `<job>.mpxar.didx` row (not the download arrow:
+that downloads PBS's raw archive format). In the File Browser, select a file
+or folder and click **Download**; folders come as a `.zip`.
 
 On the command line:
 
