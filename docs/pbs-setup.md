@@ -59,6 +59,23 @@ the history costs only what changes between runs. The PBS web UI shows
 the real usage once the first backups are in; the disk can be grown later
 (resize it in Proxmox, then grow the filesystem in the VM).
 
+### Growing the datastore later
+
+Keep an eye on the usage on the PBS dashboard and grow the disk before it
+passes ~80%: a full datastore stops accepting backups, and garbage
+collection needs some free space to run.
+
+1. Proxmox VE: VM > Hardware > the datastore disk > Disk Action > Resize,
+   and add the extra GB.
+2. In the PBS VM's shell (the web UI's Directory > Create put an ext4
+   partition `sdb1` on the disk):
+   ```sh
+   apt install -y cloud-guest-utils   # once, for growpart
+   growpart /dev/sdb 1
+   resize2fs /dev/sdb1                # works while mounted
+   ```
+3. The datastore shows the new size right away.
+
 Keep the VM out of Proxmox HA, since its datastore disk is local to one
 node. If the VM or the node ever dies, attach the datastore disk to a
 fresh PBS install and the backups are back.
