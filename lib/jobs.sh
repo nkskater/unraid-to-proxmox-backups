@@ -3,7 +3,8 @@
 #
 # A job is a bash file in $UPB_CONFIG_DIR/jobs.d/NN-name.conf naming one
 # Unraid folder (EXPORT). Each job becomes one backup group on PBS
-# (host/<BACKUP_ID_PREFIX>-<name>) whose snapshots hold one archive, <name>.pxar.
+# (host/<BACKUP_ID_PREFIX>-<name>) whose snapshots hold one archive, <name>.pxar,
+# and, with offsite copies on, restic snapshots tagged <name>.
 
 ARCHIVE_NAME_RE='^[A-Za-z0-9_-]+$'
 BACKUP_ID_RE='^[A-Za-z0-9_][A-Za-z0-9._-]*$'
@@ -45,6 +46,8 @@ load_job() {
   WAIT_FOR_QUIET=false
   ONLY_NEWEST=0
   BACKUP_ID=""
+  PBS_BACKUP=true
+  OFFSITE_BACKUP=true
 
   JOB_NAME=$(job_name "$1")
   # shellcheck source=/dev/null
@@ -58,6 +61,19 @@ load_job() {
 
 job_enabled() {
   (load_job "$1" >/dev/null 2>&1 && [[ $JOB_ENABLED == true ]])
+}
+
+# job_goes_to <file> <pbs|offsite> — true if the job is copied there. A job
+# file that doesn't load counts as yes, so running it reports what's wrong.
+job_goes_to() {
+  (
+    load_job "$1" >/dev/null 2>&1 || exit 0
+    case $2 in
+      pbs) [[ $PBS_BACKUP == true ]] ;;
+      offsite) [[ $OFFSITE_BACKUP == true ]] ;;
+      *) exit 1 ;;
+    esac
+  )
 }
 
 # Prints the backup id of a job given its name.
@@ -93,6 +109,13 @@ validate_job() {
   esac
   if [[ ! $ONLY_NEWEST =~ ^[0-9]+$ ]]; then
     error "[$JOB_NAME] ONLY_NEWEST must be a number (0 = back up everything)"
+    rc=1
+  fi
+  if [[ ! $PBS_BACKUP =~ ^(true|false)$ || ! $OFFSITE_BACKUP =~ ^(true|false)$ ]]; then
+    error "[$JOB_NAME] PBS_BACKUP and OFFSITE_BACKUP must be true or false"
+    rc=1
+  elif [[ $PBS_BACKUP == false && $OFFSITE_BACKUP == false ]]; then
+    error "[$JOB_NAME] PBS_BACKUP and OFFSITE_BACKUP are both false, so it's never backed up (use JOB_ENABLED=false to turn it off)"
     rc=1
   fi
   return "$rc"
@@ -132,14 +155,10 @@ exclude_older_entries() {
   info "[$JOB_NAME] backing up the newest $ONLY_NEWEST of $count entries: ${entries[*]:count-ONLY_NEWEST}"
 }
 
-# Runs one job: mount the export read-only, optionally wait for writes to
-# settle and skip older runs, back it up, unmount. Call it in its own subshell: it sources the job
-# file and sets traps.
-run_job() {
-  local rc
-  load_job "$1" || return 1
-  validate_job || return 1
-
+# Mounts the job's export read-only at $JOB_MOUNT and gets it ready to read:
+# optionally waits for writes to settle and skips older runs. Sets the traps
+# that always unmount it again.
+open_job_source() {
   trap 'unmount_export "$JOB_MOUNT"' EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
@@ -151,11 +170,38 @@ run_job() {
   if ((ONLY_NEWEST > 0)); then
     exclude_older_entries
   fi
+}
+
+# Runs one job into PBS: mount, back up, unmount. Call it in its own subshell:
+# it sources the job file and sets traps.
+run_job() {
+  local rc
+  load_job "$1" || return 1
+  validate_job || return 1
+  open_job_source || return 1
 
   info "[$JOB_NAME] backing up $UNRAID_HOST:$EXPORT to host/$BACKUP_ID"
   pbs_backup "$BACKUP_ID" "$JOB_NAME.pxar:$JOB_MOUNT"
   rc=$?
   ((rc == 0)) || error "[$JOB_NAME] proxmox-backup-client failed (exit $rc)"
+  unmount_export "$JOB_MOUNT"
+  return "$rc"
+}
+
+# Runs one job into the offsite repository. It mounts under OFFSITE_MOUNT_ROOT,
+# so it can run while a PBS backup of the same share is in progress. Call it in
+# its own subshell.
+run_offsite_job() {
+  local rc
+  load_job "$1" || return 1
+  validate_job || return 1
+  JOB_MOUNT="$OFFSITE_MOUNT_ROOT/$JOB_NAME"
+  open_job_source || return 1
+
+  info "[$JOB_NAME] copying $UNRAID_HOST:$EXPORT offsite to $OFFSITE_REPOSITORY"
+  restic_backup "$JOB_NAME" "$JOB_MOUNT"
+  rc=$?
+  ((rc == 0)) || error "[$JOB_NAME] restic failed (exit $rc)"
   unmount_export "$JOB_MOUNT"
   return "$rc"
 }

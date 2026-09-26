@@ -65,3 +65,29 @@ NOTIFY_ON_SUCCESS=false
 # healthchecks.io-compatible URL, pinged at start, on success and on failure.
 # It also alerts you when a backup never ran at all.
 HEALTHCHECK_URL=""
+
+# --- Offsite copy (Google Drive) --------------------------------------------
+# `upb offsite` copies every enabled job again with restic, encrypted before it
+# leaves this VM, e.g. to Google Drive through rclone. Set up the Drive
+# connection and password first: docs/offsite.md.
+OFFSITE_ENABLED=false
+# "rclone:<remote>:<folder>" for an rclone remote (see `rclone config`).
+OFFSITE_REPOSITORY="rclone:gdrive:upb-offsite"
+# restic's password. Without it the offsite copy can't be read: keep a copy in
+# your password manager.
+OFFSITE_PASSWORD_FILE="/etc/upb/secrets/restic-password"
+OFFSITE_RCLONE_CONFIG="/etc/upb/secrets/rclone.conf"
+# How many snapshots to keep per job on Drive.
+OFFSITE_KEEP_DAILY=7
+OFFSITE_KEEP_WEEKLY=4
+OFFSITE_KEEP_MONTHLY=6
+# Weekday (1 = Monday ... 7 = Sunday) on which data no snapshot needs anymore
+# is deleted, and day of the month on which a sample is downloaded and verified.
+OFFSITE_PRUNE_WEEKDAY=7
+OFFSITE_CHECK_DAY=1
+OFFSITE_CHECK_SUBSET="5%"
+# Extra restic backup flags, e.g. (--limit-upload 4000) to cap the upload at
+# about 4 MB/s so it doesn't fill your internet connection.
+OFFSITE_EXTRA_ARGS=()
+# Separate healthchecks.io check for offsite runs (the first one can take days).
+OFFSITE_HEALTHCHECK_URL=""

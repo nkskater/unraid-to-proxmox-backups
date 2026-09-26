@@ -88,6 +88,26 @@ set_config_defaults() {
   NOTIFY_ON_SUCCESS=false
   SENDMAIL_CMD="sendmail"
   HEALTHCHECK_URL=""
+
+  OFFSITE_ENABLED=false
+  OFFSITE_REPOSITORY="rclone:gdrive:upb-offsite"
+  OFFSITE_PASSWORD_FILE="$UPB_CONFIG_DIR/secrets/restic-password"
+  OFFSITE_RCLONE_CONFIG="$UPB_CONFIG_DIR/secrets/rclone.conf"
+  OFFSITE_MOUNT_ROOT="/mnt/upb-offsite"
+  OFFSITE_HOST="upb"
+  OFFSITE_KEEP_DAILY=7
+  OFFSITE_KEEP_WEEKLY=4
+  OFFSITE_KEEP_MONTHLY=6
+  OFFSITE_PRUNE_WEEKDAY=7
+  OFFSITE_CHECK_DAY=1
+  OFFSITE_CHECK_SUBSET="5%"
+  OFFSITE_PACK_SIZE=64
+  OFFSITE_CACHE_DIR="/var/cache/upb/restic"
+  OFFSITE_EXTRA_ARGS=()
+  OFFSITE_LOCK_FILE="/run/upb-offsite.lock"
+  OFFSITE_HEALTHCHECK_URL=""
+  RESTIC_CMD="restic"
+  RCLONE_CMD="rclone"
 }
 
 load_config() {
@@ -100,14 +120,18 @@ load_config() {
   source "$conf" || die "failed to load $conf"
 }
 
-# Checks the settings needed to run backups. Reports every problem, returns 1 if any.
-validate_config() {
-  local -a problems=()
-  local p
+# The check_* functions each append to the caller's problems array, so every
+# problem is reported at once.
+
+# Settings for reading Unraid: needed by backups and offsite copies.
+check_source_settings() {
   [[ -n $UNRAID_HOST ]] || problems+=("UNRAID_HOST is not set")
   # Read-only is not negotiable: this tool must never be able to change Unraid data.
   [[ ,$NFS_OPTIONS, == *,ro,* ]] || problems+=("NFS_OPTIONS must include 'ro' (got '$NFS_OPTIONS')")
   [[ $MOUNT_ROOT == /?* ]] || problems+=("MOUNT_ROOT must be an absolute path")
+}
+
+check_pbs_settings() {
   [[ -n $PBS_SERVER ]] || problems+=("PBS_SERVER is not set")
   [[ -n $PBS_DATASTORE ]] || problems+=("PBS_DATASTORE is not set")
   if [[ -z $PBS_AUTH_ID ]]; then
@@ -123,13 +147,54 @@ validate_config() {
     '' | legacy | data | metadata) ;;
     *) problems+=("PBS_CHANGE_DETECTION_MODE must be legacy, data or metadata") ;;
   esac
+}
 
-  if ((${#problems[@]})); then
-    for p in "${problems[@]}"; do error "config: $p"; done
-    return 1
+check_offsite_settings() {
+  local n
+  [[ -n $OFFSITE_REPOSITORY ]] || problems+=("OFFSITE_REPOSITORY is not set")
+  if [[ $OFFSITE_MOUNT_ROOT != /?* ]]; then
+    problems+=("OFFSITE_MOUNT_ROOT must be an absolute path")
+  elif [[ ${OFFSITE_MOUNT_ROOT%/} == "${MOUNT_ROOT%/}" ]]; then
+    problems+=("OFFSITE_MOUNT_ROOT must differ from MOUNT_ROOT, so backups and offsite copies can run at the same time")
   fi
+  [[ -r $OFFSITE_PASSWORD_FILE ]] ||
+    problems+=("offsite password file not readable: $OFFSITE_PASSWORD_FILE (see docs/offsite.md)")
+  if [[ $OFFSITE_REPOSITORY == rclone:* && -n $OFFSITE_RCLONE_CONFIG && ! -r $OFFSITE_RCLONE_CONFIG ]]; then
+    problems+=("rclone config not readable: $OFFSITE_RCLONE_CONFIG (see docs/offsite.md)")
+  fi
+  for n in OFFSITE_KEEP_DAILY OFFSITE_KEEP_WEEKLY OFFSITE_KEEP_MONTHLY; do
+    [[ ${!n} =~ ^[0-9]+$ ]] || problems+=("$n must be a number")
+  done
+  [[ $OFFSITE_PRUNE_WEEKDAY =~ ^[1-7]?$ ]] ||
+    problems+=("OFFSITE_PRUNE_WEEKDAY must be 1 (Monday) to 7 (Sunday), or empty for never")
+  [[ $OFFSITE_CHECK_DAY =~ ^([1-9]|[12][0-9]|3[01])?$ ]] ||
+    problems+=("OFFSITE_CHECK_DAY must be a day of the month (1-31), or empty for never")
+}
+
+# Prints every collected problem; returns 1 if there were any.
+report_problems() {
+  local p
+  ((${#problems[@]})) || return 0
+  for p in "${problems[@]}"; do error "config: $p"; done
+  return 1
+}
+
+# Checks the settings needed to run backups. Reports every problem, returns 1 if any.
+validate_config() {
+  local -a problems=()
+  check_source_settings
+  check_pbs_settings
+  report_problems || return 1
   [[ -n $PBS_FINGERPRINT ]] || warn "PBS_FINGERPRINT is empty: this only works if the PBS certificate is trusted"
   return 0
+}
+
+# Checks the settings needed for offsite copies.
+validate_offsite_config() {
+  local -a problems=()
+  check_source_settings
+  check_offsite_settings
+  report_problems
 }
 
 # Sends all further output to the terminal and a timestamped log file.
@@ -140,7 +205,10 @@ setup_logging() {
   find "$LOG_DIR" -maxdepth 1 -name 'upb-*.log' -mtime +"$LOG_KEEP_DAYS" -delete 2>/dev/null
 }
 
+# acquire_lock [lock-file] — backups, offsite copies and host backups each
+# have their own lock, so they can overlap but never run twice.
 acquire_lock() {
-  exec 9>"$LOCK_FILE" || die "cannot open lock file $LOCK_FILE"
-  flock -n 9 || die "another upb run is already in progress (lock: $LOCK_FILE)"
+  local file=${1:-$LOCK_FILE}
+  exec 9>"$file" || die "cannot open lock file $file"
+  flock -n 9 || die "another upb run is already in progress (lock: $file)"
 }

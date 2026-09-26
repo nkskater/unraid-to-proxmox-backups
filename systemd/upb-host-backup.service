@@ -1,0 +1,10 @@
+[Unit]
+Description=Back up this Proxmox VE node's configuration to PBS (upb)
+Documentation=https://github.com/nkskater/unraid-to-proxmox-backups
+Wants=network-online.target
+After=network-online.target pve-cluster.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/upb host-backup
+Nice=10

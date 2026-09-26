@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Test double for rclone: only needs to exist (restic runs it itself).
+printf 'rclone %s\n' "$*" >>"${STUB_LOG:?}"

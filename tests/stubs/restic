@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Test double for restic: records each call and the environment it received.
+# `cat config` fails with STUB_RESTIC_NO_REPO=1 (no repository yet); every
+# other call exits with $STUB_RESTIC_EXIT.
+{
+  printf 'restic'
+  printf ' %q' "$@"
+  printf '\n'
+  printf 'env RESTIC_REPOSITORY=%s RESTIC_PASSWORD_FILE=%s RCLONE_CONFIG=%s RESTIC_PACK_SIZE=%s RESTIC_PASSWORD=%s\n' \
+    "${RESTIC_REPOSITORY:-}" "${RESTIC_PASSWORD_FILE:-}" "${RCLONE_CONFIG:-}" \
+    "${RESTIC_PACK_SIZE:-}" "${RESTIC_PASSWORD:-}"
+} >>"${STUB_LOG:?}"
+if [[ " $* " == *" cat config "* ]]; then
+  [[ -z ${STUB_RESTIC_NO_REPO:-} ]]
+  exit
+fi
+exit "${STUB_RESTIC_EXIT:-0}"

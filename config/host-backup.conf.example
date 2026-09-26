@@ -1,0 +1,45 @@
+# upb host backup: /etc/upb/host-backup.conf on each Proxmox VE node.
+# Backs up this node's configuration to a PBS (the PBS VM on Unraid).
+# This file is sourced by bash: write VAR="value" with no spaces around '='.
+# Setup: docs/pve-host-backup.md.
+
+# --- Proxmox Backup Server ---------------------------------------------------
+# IP address and datastore name of the PBS on Unraid (PBS web UI > Datastore).
+PBS_SERVER=""
+PBS_PORT=8007
+PBS_DATASTORE=""
+# Host backups get their own namespace, so the datastore's VM backups and their
+# retention are left alone. pbs-setup.sh creates it with the user and token.
+PBS_NAMESPACE="pve-hosts"
+PBS_AUTH_ID="pve-host@pbs!hosts"
+PBS_TOKEN_FILE="/etc/upb/secrets/pve-host-token"
+# PBS web UI > Dashboard > Show Fingerprint (pbs-setup.sh prints it too).
+PBS_FINGERPRINT=""
+
+# --- What to back up ----------------------------------------------------------
+# Backup group on PBS: host/<HOST_BACKUP_ID>. Defaults to pve-<hostname>.
+#HOST_BACKUP_ID="pve-proxmox"
+# One archive per folder. /etc holds the network, storage (iSCSI, fstab), boot
+# and passthrough settings, SSH keys and apt sources.
+HOST_BACKUP_PATHS=(/etc /root /usr/local /var/spool/cron)
+# Other filesystems mounted inside those folders to include: the cluster
+# filesystem with VM configs, storage.cfg, users and backup jobs.
+HOST_BACKUP_INCLUDE_DEV=(/etc/pve)
+# Excluded inside every folder (a leading / anchors at the folder).
+HOST_BACKUP_EXCLUDES=("/.cache/")
+# A consistent copy of the cluster database is added as pve-cluster-db.pxar.
+PVE_CLUSTER_DB="/var/lib/pve-cluster/config.db"
+
+# --- Encryption ---------------------------------------------------------------
+# The backups include secrets (/etc/pve/priv, SSH host keys). To encrypt them:
+#   proxmox-backup-client key create /etc/upb/secrets/host-encryption.key --kdf none
+# keep a copy of the key off this node, then set PBS_ENCRYPTION=true.
+PBS_ENCRYPTION=false
+PBS_KEYFILE="/etc/upb/secrets/host-encryption.key"
+
+# --- Logging and notifications ------------------------------------------------
+LOG_DIR="/var/log/upb"
+NOTIFY_EMAIL=""
+NOTIFY_NTFY_URL=""
+NOTIFY_ON_SUCCESS=false
+HEALTHCHECK_URL=""

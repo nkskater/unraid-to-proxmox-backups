@@ -50,3 +50,21 @@ pbs_setup() { bash "$UPB_ROOT/proxmox/pbs-setup.sh"; }
   [[ $output == *"datastore 'unraid' doesn't exist"* ]]
   [ -z "$(calls 'pbm user')" ]
 }
+
+@test "a namespace on a shared PBS leaves the datastore's GC and other jobs alone" {
+  export STUB_PBM_DATASTORE=1
+  export TOKEN_FILE="$BATS_TEST_TMPDIR/pve-host-token"
+  NAMESPACE=pve-hosts PBS_USER=pve-host@pbs TOKEN_NAME=hosts GC_SCHEDULE="" VERIFY_SCHEDULE="" \
+    UPB_CONF="$BATS_TEST_TMPDIR/none" run pbs_setup
+  [ "$status" -eq 0 ]
+  [ -z "$(calls 'pbm datastore create')" ]
+  [ -z "$(calls 'pbm datastore update')" ]
+  [ -z "$(calls 'pbm verify-job')" ]
+  calls pbs | grep -qx "pbs namespace create pve-hosts --repository root@pam@localhost:unraid"
+  calls pbm | grep -qx "pbm user generate-token pve-host@pbs hosts"
+  calls pbm | grep -qx "pbm acl update /datastore/unraid/pve-hosts DatastoreBackup --auth-id pve-host@pbs!hosts"
+  calls pbm | grep -q "^pbm prune-job create unraid-pve-hosts-retention --store unraid --ns pve-hosts --schedule 08:00 "
+  [ "$(cat "$TOKEN_FILE")" = "0123-abcd-secret" ]
+  [[ $output == *'PBS_AUTH_ID="pve-host@pbs!hosts"'* ]]
+  [[ $output == *'PBS_FINGERPRINT="64:d3:ff:3a"'* ]]
+}

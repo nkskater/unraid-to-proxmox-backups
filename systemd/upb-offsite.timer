@@ -1,0 +1,13 @@
+[Unit]
+Description=Nightly offsite copy of Unraid shares (upb)
+
+[Timer]
+# After the 06:00 PBS backup and PBS's prune and garbage collection. For the
+# pbs-data job, pick a time when the PBS on Unraid isn't running backups or
+# garbage collection either.
+OnCalendar=*-*-* 10:30
+# Run at boot if the VM was off at the scheduled time.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

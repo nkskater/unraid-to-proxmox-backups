@@ -1,0 +1,12 @@
+# The datastore of the other PBS: the VM on Unraid that backs up your Proxmox
+# VMs (and, with upb host-backup, the Proxmox nodes' configuration). It is
+# already a backup, so it's only copied offsite, not into this PBS again.
+# Turn it on once offsite copies work (docs/offsite.md).
+JOB_ENABLED=false
+EXPORT="/mnt/user/pbs_data"
+PBS_BACKUP=false
+OFFSITE_BACKUP=true
+
+# Wait until the other PBS has stopped writing (a backup or garbage
+# collection), so the copy is consistent.
+WAIT_FOR_QUIET=true

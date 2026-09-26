@@ -1,6 +1,6 @@
 SCRIPTS := bin/upb install.sh proxmox/pbs-setup.sh \
 	$(wildcard lib/*.sh) $(wildcard tests/stubs/*) tests/test_helper.bash
-CONFIGS := config/upb.conf.example $(wildcard config/jobs.d/*.example)
+CONFIGS := config/upb.conf.example config/host-backup.conf.example $(wildcard config/jobs.d/*.example)
 
 .PHONY: check lint test
 

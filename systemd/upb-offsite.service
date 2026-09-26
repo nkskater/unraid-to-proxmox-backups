@@ -1,0 +1,14 @@
+[Unit]
+Description=Copy important Unraid shares offsite with restic (upb)
+Documentation=https://github.com/nkskater/unraid-to-proxmox-backups
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/upb offsite
+# The first upload can take days.
+TimeoutStartSec=infinity
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

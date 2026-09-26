@@ -73,6 +73,25 @@ docker ps -aq | xargs docker inspect -f '{{.Name}}: {{range .Mounts}}{{.Source}}
   | grep -E 'appdata/ollama(/| |$)'
 ```
 
+### Unraid VM definitions
+
+The flash backup holds Unraid's configuration, but not the definitions of
+Unraid's own VMs (like the PBS VM on Unraid): those live in `libvirt.img` on
+the `system` share, which isn't backed up. A weekly User Script copies them
+onto the flash drive, so the flash backup picks them up:
+
+```sh
+#!/bin/bash
+mkdir -p /boot/config/libvirt-backup
+rsync -a /etc/libvirt/qemu/ /boot/config/libvirt-backup/
+```
+
+That's the VM settings and their UEFI boot data, not their disks. For the PBS
+VM on Unraid that's enough: recreate the VM from its definition, reinstall
+PBS, and add the existing `pbs_data` datastore again.
+
+### Databases
+
 The plugin backs up the `PostgreSQL_Immich` and `postgresql17` data folders
 with those containers stopped, so they restore cleanly. A copy of a
 database's data folder only restores into the **same major Postgres
@@ -118,7 +137,12 @@ Shares to export:
 
 Don't export the media shares (huge, and they can be downloaded again),
 `system` (the Docker image and libvirt image; containers are rebuilt from
-the templates in the flash backup), or `pbs_data` / `proxmox`.
+the templates in the flash backup), or `proxmox`.
+
+`pbs_data` (the datastore of the PBS on Unraid) is only read by the optional
+offsite copy to Google Drive. It's exported to everyone already; if you
+restrict it, keep the PBS on Unraid's own entry and add
+`192.168.1.20(ro,sec=sys,no_root_squash)`. See [offsite.md](offsite.md).
 
 Only the two Appdata Backup folders inside `Backup` are backed up; its
 other folders (`configs`, `zorinos`) are left out.

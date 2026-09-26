@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Test double for proxmox-backup-manager. With STUB_PBM_EXISTING=1, every
-# object pbs-setup.sh looks for already exists.
+# object pbs-setup.sh looks for already exists; with STUB_PBM_DATASTORE=1
+# only the datastore does.
 printf 'pbm %s\n' "$*" >>"${STUB_LOG:?}"
 existing=${STUB_PBM_EXISTING:-}
 case "$1 $2" in
-  "datastore list") [[ -n $existing ]] && echo '[{"name": "unraid", "path": "/mnt/ds"}]' || echo '[]' ;;
+  "datastore list") [[ -n $existing || -n ${STUB_PBM_DATASTORE:-} ]] && echo '[{"name": "unraid", "path": "/mnt/ds"}]' || echo '[]' ;;
   "user list") [[ -n $existing ]] && echo '[{"userid":"unraid-backup@pbs"}]' || echo '[{"userid":"root@pam"}]' ;;
   "user list-tokens") [[ -n $existing ]] && echo '[{"tokenid":"unraid-backup@pbs!unraid"}]' || echo '[]' ;;
   "prune-job list") [[ -n $existing ]] && echo '[{"id":"unraid-retention"}]' || echo '[]' ;;

@@ -9,6 +9,13 @@
 # that may only *add* backups (no delete or prune), plus prune, verify and
 # garbage-collection schedules. The token secret and the certificate
 # fingerprint are written straight into upb's config.
+#
+# On a PBS that already holds other backups (the PBS on Unraid, for Proxmox
+# node configs), keep everything in its own namespace and leave the
+# datastore's garbage collection and verify jobs as they are:
+#
+#   DATASTORE=<name> NAMESPACE=pve-hosts PBS_USER=pve-host@pbs TOKEN_NAME=hosts \
+#     TOKEN_FILE=/root/pve-host-token GC_SCHEDULE= VERIFY_SCHEDULE= ./pbs-setup.sh
 set -euo pipefail
 
 DATASTORE="${DATASTORE:-unraid}"
@@ -26,14 +33,18 @@ KEEP_DAILY="${KEEP_DAILY:-14}"
 KEEP_WEEKLY="${KEEP_WEEKLY:-8}"
 KEEP_MONTHLY="${KEEP_MONTHLY:-12}"
 KEEP_YEARLY="${KEEP_YEARLY:-3}"
-GC_SCHEDULE="${GC_SCHEDULE:-09:00}"
-# Re-read and checksum every snapshot older than VERIFY_OUTDATED_DAYS.
-VERIFY_SCHEDULE="${VERIFY_SCHEDULE:-sat 10:00}"
+# Set to empty to leave the datastore's garbage collection schedule alone.
+GC_SCHEDULE="${GC_SCHEDULE-09:00}"
+# Re-read and checksum every snapshot older than VERIFY_OUTDATED_DAYS. Set to
+# empty to create no verify job.
+VERIFY_SCHEDULE="${VERIFY_SCHEDULE-sat 10:00}"
 VERIFY_OUTDATED_DAYS="${VERIFY_OUTDATED_DAYS:-30}"
 
 TOKEN_ID="$PBS_USER!$TOKEN_NAME"
-PRUNE_JOB_ID="${DATASTORE}-retention"
-VERIFY_JOB_ID="${DATASTORE}-verify"
+# Jobs for a namespace get their own ids, so the datastore's own jobs are never touched.
+JOB_PREFIX="$DATASTORE${NAMESPACE:+-${NAMESPACE//\//-}}"
+PRUNE_JOB_ID="$JOB_PREFIX-retention"
+VERIFY_JOB_ID="$JOB_PREFIX-verify"
 ACL_PATH="/datastore/$DATASTORE${NAMESPACE:+/$NAMESPACE}"
 
 say() { printf '\n==> %s\n' "$*"; }
@@ -59,8 +70,12 @@ elif [[ -n $DATASTORE_PATH ]]; then
 else
   die "datastore '$DATASTORE' doesn't exist. Create it in the web UI, or set DATASTORE_PATH to create it here"
 fi
-pbm datastore update "$DATASTORE" --gc-schedule "$GC_SCHEDULE"
-echo "garbage collection: $GC_SCHEDULE"
+if [[ -n $GC_SCHEDULE ]]; then
+  pbm datastore update "$DATASTORE" --gc-schedule "$GC_SCHEDULE"
+  echo "garbage collection: $GC_SCHEDULE"
+else
+  echo "garbage collection: left as it is"
+fi
 
 if [[ -n $NAMESPACE ]]; then
   say "Namespace '$NAMESPACE'"
@@ -120,14 +135,17 @@ fi
 echo "$PRUNE_SCHEDULE: keep last $KEEP_LAST, daily $KEEP_DAILY, weekly $KEEP_WEEKLY, monthly $KEEP_MONTHLY, yearly $KEEP_YEARLY"
 
 say "Verify job '$VERIFY_JOB_ID'"
-if json_has "$(pbm verify-job list --output-format json)" id "$VERIFY_JOB_ID"; then
+if [[ -z $VERIFY_SCHEDULE ]]; then
+  echo "skipped (VERIFY_SCHEDULE is empty)"
+elif json_has "$(pbm verify-job list --output-format json)" id "$VERIFY_JOB_ID"; then
   pbm verify-job update "$VERIFY_JOB_ID" --schedule "$VERIFY_SCHEDULE" \
     --ignore-verified true --outdated-after "$VERIFY_OUTDATED_DAYS"
+  echo "$VERIFY_SCHEDULE, re-verifying snapshots after $VERIFY_OUTDATED_DAYS days"
 else
   pbm verify-job create "$VERIFY_JOB_ID" --store "$DATASTORE" "${ns_args[@]}" \
     --schedule "$VERIFY_SCHEDULE" --ignore-verified true --outdated-after "$VERIFY_OUTDATED_DAYS"
+  echo "$VERIFY_SCHEDULE, re-verifying snapshots after $VERIFY_OUTDATED_DAYS days"
 fi
-echo "$VERIFY_SCHEDULE, re-verifying snapshots after $VERIFY_OUTDATED_DAYS days"
 
 say "upb config"
 fingerprint=$(pbm cert info | awk -F': ' '/[Ff]ingerprint/ { print $2; exit }')
@@ -138,11 +156,14 @@ fi
 
 cat <<EOF
 
-Done. $UPB_CONF should contain:
+Done. Client settings (upb.conf on this machine, or host-backup.conf on the
+machines that back up to this PBS):
 
-  PBS_SERVER="localhost"
+  PBS_SERVER="localhost"    # from another machine: this server's IP address
   PBS_DATASTORE="$DATASTORE"
   PBS_NAMESPACE="$NAMESPACE"
   PBS_AUTH_ID="$TOKEN_ID"
   PBS_FINGERPRINT="$fingerprint"
+
+The token secret is in $TOKEN_FILE (if it was created in this run).
 EOF

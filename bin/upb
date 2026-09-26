@@ -16,6 +16,10 @@ source "$UPB_ROOT/lib/nfs.sh"
 source "$UPB_ROOT/lib/notify.sh"
 # shellcheck source=lib/jobs.sh
 source "$UPB_ROOT/lib/jobs.sh"
+# shellcheck source=lib/offsite.sh
+source "$UPB_ROOT/lib/offsite.sh"
+# shellcheck source=lib/host.sh
+source "$UPB_ROOT/lib/host.sh"
 
 usage() {
   cat <<EOF
@@ -35,6 +39,20 @@ Commands:
   init-key                      Create a client-side encryption key
   client ARGS...                Run proxmox-backup-client against the configured
                                 repository, e.g. "upb client snapshot list"
+
+Offsite copies (restic, e.g. to Google Drive; see docs/offsite.md):
+  offsite [--dry-run] [JOB...]  Copy all enabled jobs offsite, or only the named ones
+  offsite-init                  Create the offsite repository (once)
+  restic ARGS...                Run restic against the offsite repository,
+                                e.g. "upb restic snapshots"
+
+On a Proxmox VE node (install.sh --pve-host; see docs/pve-host-backup.md):
+  host-backup [--dry-run]       Back up this node's configuration to PBS
+  host-restore DIR [SNAPSHOT]   Restore this node's latest (or the given)
+                                configuration backup into an empty DIR
+  host-client ARGS...           Run proxmox-backup-client against the host
+                                backup repository
+
   version                       Print the upb version
 
 Config directory: $UPB_CONFIG_DIR (change it with --config-dir or UPB_CONFIG_DIR)
@@ -49,90 +67,247 @@ prepare_pbs() {
   ensure_client || exit 1
 }
 
-# Aborts a backup run, making sure the failure is reported, not just logged.
-abort_backup() {
-  error "$1"
+# abort_run <subject> <message> — aborts a run, making sure the failure is
+# reported, not just logged.
+abort_run() {
+  error "$2"
   if ! dry_run; then
-    notify failure "upb: backup did not run" "$1"
+    notify failure "$1" "$2"
     healthcheck_ping fail "$UPB_LOG_FILE"
   fi
   exit 1
 }
 
-cmd_backup() {
-  local -a names=() files=() results=()
-  local f name start rc failed=0 summary
+# parse_run_args <names-array> "$@" — handles --dry-run and collects job names.
+parse_run_args() {
+  local -n _names=$1
+  shift
   while (($#)); do
     case $1 in
       -n | --dry-run) UPB_DRY_RUN=true ;;
       -*) die "unknown option: $1" ;;
-      *) names+=("$1") ;;
+      *) _names+=("$1") ;;
     esac
     shift
   done
+}
 
-  load_config
-  validate_config || abort_backup "invalid configuration in $UPB_CONFIG_DIR/upb.conf (run: upb check)"
-
-  if ((${#names[@]})); then
-    for name in "${names[@]}"; do
+# select_jobs <files-array> <pbs|offsite> [NAME...] — the named jobs, or every
+# enabled job that goes to the destination.
+select_jobs() {
+  local -n _files=$1
+  local dest=$2 f name
+  shift 2
+  if (($#)); then
+    for name in "$@"; do
       f=$(find_job_file "$name") || die "unknown job: $name (see: upb list)"
-      files+=("$f")
+      job_goes_to "$f" "$dest" ||
+        die "job $name is not copied to $dest (see PBS_BACKUP and OFFSITE_BACKUP in its file)"
+      _files+=("$f")
     done
   else
     while IFS= read -r f; do
-      if job_enabled "$f"; then files+=("$f"); fi
+      if job_enabled "$f" && job_goes_to "$f" "$dest"; then _files+=("$f"); fi
     done < <(job_files)
   fi
-  ((${#files[@]})) || die "no enabled jobs in $UPB_CONFIG_DIR/jobs.d"
+  ((${#_files[@]})) || die "no enabled jobs for $dest in $UPB_CONFIG_DIR/jobs.d"
+}
 
-  dry_run || setup_logging backup
-  acquire_lock
-  if ! dry_run; then
-    ensure_client || abort_backup "proxmox-backup-client is missing"
-    healthcheck_ping start
+# record_result <name> <exit-code> <start-seconds> — adds a summary line to
+# RESULTS and counts failures in FAILED.
+record_result() {
+  if (($2 == 0)); then
+    RESULTS+=("OK    $1 ($(format_duration $((SECONDS - $3))))")
+  else
+    RESULTS+=("FAIL  $1 (exit $2)")
+    FAILED=$((FAILED + 1))
   fi
-  info "upb $UPB_VERSION: ${#files[@]} job(s) from $UNRAID_HOST to $(pbs_repository)${PBS_NAMESPACE:+ ns=$PBS_NAMESPACE}"
+}
 
-  for f in "${files[@]}"; do
+# run_job_files <runner> <file>... — runs each job in its own subshell, so jobs
+# can't leak settings or traps into each other.
+run_job_files() {
+  local runner=$1 f name start
+  shift
+  for f in "$@"; do
     name=$(job_name "$f")
     start=$SECONDS
     info "=== $name ==="
-    (run_job "$f")
-    rc=$?
-    if ((rc == 0)); then
-      results+=("OK    $name ($(format_duration $((SECONDS - start))))")
-    else
-      results+=("FAIL  $name (exit $rc)")
-      failed=$((failed + 1))
-    fi
+    ("$runner" "$f")
+    record_result "$name" $? "$start"
   done
+}
 
+# finish_run <subject-prefix> <what> — prints the summary and notifies.
+finish_run() {
+  local prefix=$1 what=$2 line summary
   info "=== summary ==="
-  for summary in "${results[@]}"; do info "$summary"; done
-  dry_run && return "$((failed > 0))"
+  for line in "${RESULTS[@]}"; do info "$line"; done
+  dry_run && return "$((FAILED > 0))"
 
-  printf -v summary '%s\n' "${results[@]}"
+  printf -v summary '%s\n' "${RESULTS[@]}"
   summary+="Log: $UPB_LOG_FILE"
-  if ((failed)); then
-    notify failure "upb: $failed of ${#files[@]} backup job(s) failed" "$summary"
+  if ((FAILED)); then
+    notify failure "$prefix: $FAILED of ${#RESULTS[@]} $what failed" "$summary"
     healthcheck_ping fail "$UPB_LOG_FILE"
     return 1
   fi
   if [[ $NOTIFY_ON_SUCCESS == true ]]; then
-    notify success "upb: ${#files[@]} backup job(s) OK" "$summary"
+    notify success "$prefix: ${#RESULTS[@]} $what OK" "$summary"
   fi
   healthcheck_ping "" "$UPB_LOG_FILE"
+}
+
+cmd_backup() {
+  local -a names=() files=()
+  RESULTS=()
+  FAILED=0
+  parse_run_args names "$@"
+
+  load_config
+  validate_config ||
+    abort_run "upb: backup did not run" "invalid configuration in $UPB_CONFIG_DIR/upb.conf (run: upb check)"
+  select_jobs files pbs "${names[@]}"
+
+  dry_run || setup_logging backup
+  acquire_lock
+  if ! dry_run; then
+    ensure_client || abort_run "upb: backup did not run" "proxmox-backup-client is missing"
+    healthcheck_ping start
+  fi
+  info "upb $UPB_VERSION: ${#files[@]} job(s) from $UNRAID_HOST to $(pbs_repository)${PBS_NAMESPACE:+ ns=$PBS_NAMESPACE}"
+  run_job_files run_job "${files[@]}"
+  finish_run "upb" "backup job(s)"
+}
+
+cmd_offsite() {
+  local -a names=() files=()
+  local start
+  RESULTS=()
+  FAILED=0
+  parse_run_args names "$@"
+
+  load_config
+  # Offsite runs report to their own check, so a slow upload never looks like
+  # a missed backup (and the other way round).
+  HEALTHCHECK_URL=$OFFSITE_HEALTHCHECK_URL
+  [[ $OFFSITE_ENABLED == true ]] ||
+    die "offsite copies are off: set OFFSITE_ENABLED=true in $UPB_CONFIG_DIR/upb.conf (see docs/offsite.md)"
+  validate_offsite_config ||
+    abort_run "upb offsite: did not run" "invalid offsite configuration in $UPB_CONFIG_DIR/upb.conf (run: upb check)"
+  select_jobs files offsite "${names[@]}"
+
+  dry_run || setup_logging offsite
+  acquire_lock "$OFFSITE_LOCK_FILE"
+  if ! dry_run; then
+    ensure_restic || abort_run "upb offsite: did not run" "restic or rclone is missing"
+    healthcheck_ping start
+  fi
+  info "upb $UPB_VERSION offsite: ${#files[@]} job(s) from $UNRAID_HOST to $OFFSITE_REPOSITORY"
+  run_job_files run_offsite_job "${files[@]}"
+
+  # Retention and checks cover the whole repository, so they only run with
+  # the full set of jobs, not for a quick "upb offsite JOB".
+  if ((${#names[@]} == 0)); then
+    info "=== retention ==="
+    start=$SECONDS
+    offsite_maintenance
+    record_result retention $? "$start"
+  fi
+  finish_run "upb offsite" "step(s)"
+}
+
+cmd_offsite_init() {
+  load_config
+  validate_offsite_config || die "fix the settings above in $UPB_CONFIG_DIR/upb.conf"
+  ensure_restic || exit 1
+  if restic_run cat config >/dev/null 2>&1; then
+    info "the offsite repository already exists: $OFFSITE_REPOSITORY"
+    return 0
+  fi
+  info "creating the offsite repository $OFFSITE_REPOSITORY"
+  restic_run init || die "restic init failed"
+  cat <<EOF
+
+IMPORTANT: the offsite copy can only be read with the password in
+$OFFSITE_PASSWORD_FILE. Keep a copy somewhere other than this VM, e.g. in
+your password manager.
+EOF
+}
+
+cmd_restic() {
+  load_config
+  validate_offsite_config || die "fix the settings above in $UPB_CONFIG_DIR/upb.conf"
+  ensure_restic || exit 1
+  restic_run "$@"
+}
+
+cmd_host_backup() {
+  local -a names=()
+  local start
+  RESULTS=()
+  FAILED=0
+  parse_run_args names "$@"
+  ((${#names[@]} == 0)) || die "usage: upb host-backup [--dry-run]"
+
+  load_host_config
+  validate_host_config ||
+    abort_run "upb host-backup: did not run" "invalid configuration in $UPB_CONFIG_DIR/host-backup.conf"
+
+  dry_run || setup_logging host-backup
+  acquire_lock
+  if ! dry_run; then
+    ensure_client || abort_run "upb host-backup: did not run" "proxmox-backup-client is missing"
+    healthcheck_ping start
+  fi
+  info "upb $UPB_VERSION: configuration of $(hostname) to $(pbs_repository)${PBS_NAMESPACE:+ ns=$PBS_NAMESPACE}"
+  start=$SECONDS
+  (run_host_backup)
+  record_result "host/$HOST_BACKUP_ID" $? "$start"
+  finish_run "upb host-backup" "backup(s)"
+}
+
+cmd_host_restore() {
+  (($# >= 1)) || die "usage: upb host-restore DIR [SNAPSHOT]"
+  local target=$1 snapshot=${2:-} name rc=0
+  load_host_config
+  validate_host_config || die "fix the settings above in $UPB_CONFIG_DIR/host-backup.conf"
+  ensure_client || exit 1
+  if [[ -e $target && -n $(find "$target" -mindepth 1 -print -quit 2>/dev/null) ]]; then
+    die "$target is not empty; restore into a new directory"
+  fi
+  while IFS= read -r name; do
+    local -a args=(restore "${snapshot:-host/$HOST_BACKUP_ID}" "$name.pxar" "$target/$name")
+    add_ns_args args
+    add_key_args args
+    info "restoring $name.pxar into $target/$name"
+    if ! pbs_client "${args[@]}"; then
+      warn "could not restore $name.pxar (not in this snapshot?)"
+      rc=1
+    fi
+  done < <(host_archive_names)
+  info "nothing on this host was changed; copy back what you need (see docs/pve-host-backup.md)"
+  return "$rc"
+}
+
+cmd_host_client() {
+  load_host_config
+  validate_host_config || die "fix the settings above in $UPB_CONFIG_DIR/host-backup.conf"
+  ensure_client || exit 1
+  pbs_client "$@"
 }
 
 cmd_list() {
   local f
   load_config
-  printf '%-16s %-8s %-28s %s\n' JOB ENABLED GROUP EXPORT
+  printf '%-18s %-8s %-30s %-8s %s\n' JOB ENABLED "PBS GROUP" OFFSITE EXPORT
   while IFS= read -r f; do
     (
       load_job "$f" >/dev/null 2>&1
-      printf '%-16s %-8s %-28s %s\n' "$JOB_NAME" "$JOB_ENABLED" "host/$BACKUP_ID" "$UNRAID_HOST:$EXPORT"
+      group="host/$BACKUP_ID" offsite=$OFFSITE_BACKUP
+      [[ $PBS_BACKUP == true ]] || group="-"
+      [[ $OFFSITE_ENABLED == true ]] || offsite="off"
+      printf '%-18s %-8s %-30s %-8s %s\n' "$JOB_NAME" "$JOB_ENABLED" "$group" "$offsite" "$UNRAID_HOST:$EXPORT"
     )
   done < <(job_files)
 }
@@ -159,6 +334,21 @@ cmd_check() {
     fi
   else
     rc=1
+  fi
+
+  if [[ $OFFSITE_ENABLED == true ]]; then
+    info "offsite:    $OFFSITE_REPOSITORY"
+    if validate_offsite_config && ensure_restic; then
+      if out=$(restic_run cat config 2>&1); then
+        info "offsite repository reachable"
+      else
+        error "cannot open the offsite repository (new? run: upb offsite-init):"
+        printf '  %s\n' "$out" >&2
+        rc=1
+      fi
+    else
+      rc=1
+    fi
   fi
 
   if [[ -n $UNRAID_HOST ]] && command -v showmount >/dev/null; then
@@ -293,6 +483,12 @@ main() {
     shell) cmd_shell "$@" ;;
     init-key) cmd_init_key "$@" ;;
     client) cmd_client "$@" ;;
+    offsite) cmd_offsite "$@" ;;
+    offsite-init) cmd_offsite_init "$@" ;;
+    restic) cmd_restic "$@" ;;
+    host-backup) cmd_host_backup "$@" ;;
+    host-restore) cmd_host_restore "$@" ;;
+    host-client) cmd_host_client "$@" ;;
     version) echo "upb $UPB_VERSION" ;;
     *) die "unknown command: $cmd (see: upb --help)" ;;
   esac

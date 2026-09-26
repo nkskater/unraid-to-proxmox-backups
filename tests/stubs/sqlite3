@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Test double for `sqlite3 DB ".backup 'FILE'"`: copies DB to FILE.
+printf 'sqlite3 %s\n' "$*" >>"${STUB_LOG:?}"
+[[ -z ${STUB_SQLITE_FAIL:-} ]] || exit 1
+target=${2#.backup \'}
+target=${target%\'}
+cp "$1" "$target"

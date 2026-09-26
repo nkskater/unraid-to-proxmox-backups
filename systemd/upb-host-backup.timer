@@ -1,0 +1,10 @@
+[Unit]
+Description=Nightly backup of this Proxmox VE node's configuration (upb)
+
+[Timer]
+OnCalendar=*-*-* 05:30
+# Run at boot if the node was off at the scheduled time.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

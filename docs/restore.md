@@ -88,6 +88,16 @@ would end up in the folder name.
 Disk assignments, shares, Docker templates and plugins come back with it.
 Then restore appdata as above before starting containers.
 
+## From Google Drive
+
+If offsite copies are on, every job is also on Google Drive: see
+[offsite.md](offsite.md#restoring-from-google-drive). That includes the
+datastore of the PBS on Unraid (your Proxmox VM backups).
+
+## Proxmox node settings
+
+See [pve-host-backup.md](pve-host-backup.md#restoring).
+
 ## If the PBS VM itself is gone
 
 The backups live on the datastore disk. Install a fresh PBS (as a VM or on

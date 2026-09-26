@@ -99,8 +99,7 @@ It installs `nfs-common` if needed, puts the program in `/opt/upb` with a
 `upb` command in `/usr/local/bin`, creates `/etc/upb/upb.conf` and
 `/etc/upb/jobs.d/*.conf` if they don't exist yet (updates never overwrite
 them), and installs the `upb-backup` systemd service and timer without
-enabling them. To update later, pull the new version and run
-`./install.sh` again.
+enabling them. To update later, see [Updating](#updating).
 
 ## 3. Prepare PBS
 
@@ -202,7 +201,33 @@ in the PBS web UI. If you later sync the datastore off site, run
 `upb init-key`, keep the printed paper key somewhere safe, and set
 `PBS_ENCRYPTION=true`. New snapshots are encrypted from then on.
 
-## Optional: offsite copy
+## Offsite copy
 
-A second PBS elsewhere can **pull** this datastore with a sync job. PBS 4
-can also use S3-compatible storage as a datastore backend.
+`upb offsite` copies the same shares, encrypted, to Google Drive, and can take
+the datastore of the PBS on Unraid (your Proxmox VM backups) along:
+[offsite.md](offsite.md).
+
+## Updating
+
+1. On your PC, download `main` as a ZIP from GitHub (logged in, since the
+   repository is private):
+   <https://github.com/nkskater/unraid-to-proxmox-backups/archive/refs/heads/main.zip>
+2. Copy it to the VM: `scp unraid-to-proxmox-backups-main.zip root@192.168.1.20:`
+3. On the VM, check no backup is running (`systemctl is-active upb-backup
+   upb-offsite` prints `inactive` twice), then:
+   ```sh
+   cd ~
+   rm -rf unraid-to-proxmox-backups-main
+   unzip -q unraid-to-proxmox-backups-main.zip
+   cd unraid-to-proxmox-backups-main
+   bash install.sh
+   upb version && upb check
+   ```
+
+The update replaces `/opt/upb` and the systemd unit files. It never changes
+`/etc/upb/upb.conf`, existing job files or `/etc/upb/secrets/`; enabled
+timers stay enabled, and `pbs-setup.sh` doesn't need to run again. New job
+templates are added to `jobs.d/` (check `JOB_ENABLED` in them). To see
+settings a release added: `diff /etc/upb/upb.conf config/upb.conf.example`.
+Don't delete a job file to turn a job off: an update brings it back. Set
+`JOB_ENABLED=false` instead.

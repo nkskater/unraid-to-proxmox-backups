@@ -8,5 +8,13 @@
   printf 'env PBS_REPOSITORY=%s PBS_PASSWORD=%s PBS_FINGERPRINT=%s\n' \
     "${PBS_REPOSITORY:-}" "${PBS_PASSWORD:-}" "${PBS_FINGERPRINT:-}"
 } >>"${STUB_LOG:?}"
+# For backups, also record what each archive's folder contained at that moment.
+if [[ ${1:-} == backup ]]; then
+  for arg in "$@"; do
+    [[ $arg == *.pxar:* ]] || continue
+    printf 'saw %s: %s\n' "${arg%%:*}" \
+      "$(find "${arg#*.pxar:}" -mindepth 1 -maxdepth 1 -printf '%f ' 2>/dev/null)"
+  done >>"$STUB_LOG"
+fi
 [[ ${1:-} == version ]] && echo "client version: 4.0.0 (stub)"
 exit "${STUB_PBS_EXIT:-0}"

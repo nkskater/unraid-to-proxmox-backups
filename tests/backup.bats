@@ -363,10 +363,21 @@ EXPORT=/mnt/user/nowhere'
   done
   run upb list
   [ "$status" -eq 0 ]
-  [ "${#lines[@]}" -eq 8 ]
+  [ "${#lines[@]}" -eq 9 ]
   [[ $output == *"appdata-backup"*"true"*"host/unraid-appdata-backup"*"192.168.1.180:/mnt/user/Backup/appdata backup"* ]]
   [[ $output == *"flash-backup"*"true"*"192.168.1.180:/mnt/user/Backup/flash drive backup"* ]]
   [[ $output == *"photos-immich"*"true"*"192.168.1.180:/mnt/user/photos_immich"* ]]
   [[ $output == *"everything-else"*"true"*"192.168.1.180:/mnt/user/Everything Else"* ]]
   [[ $output == *"syncthing-backup"*"true"*"192.168.1.180:/mnt/user/syncthing backup"* ]]
+  # The other PBS's datastore: offsite only, and off until offsite copies are set up.
+  [[ $output == *"pbs-data"*"false"*" - "*"off"*"192.168.1.180:/mnt/user/pbs_data"* ]]
+}
+
+@test "a named job whose file doesn't load reports why" {
+  add_job 10-broken.conf 'EXPORT=/mnt/user/docs
+if then'
+  run upb backup broken
+  [ "$status" -eq 1 ]
+  [[ $output == *"[broken] failed to load"* ]]
+  [[ $output != *"is not copied to"* ]]
 }
