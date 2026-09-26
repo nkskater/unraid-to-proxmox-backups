@@ -94,6 +94,17 @@ version**; Immich's own dumps (below) don't have that limit.
    - The IP limits the export to the PBS VM alone. Give that VM a fixed IP
      (DHCP reservation or static).
 
+NFS access is by IP only; the username/password settings you may have on a
+share are for SMB and aren't affected. *Security: Secure* is not enough
+here: it exports read-only to every host and maps the PBS VM's root user to
+`nobody`, so files `nobody` can't read would fail to back up.
+
+If another machine already mounts a share over NFS, keep it in the Private
+rule (entries are separated by spaces), e.g.
+`192.168.1.20(ro,sec=sys,no_root_squash) 192.168.1.10(ro,sec=sys)`. To see
+who is connected: `ss -tn state established '( sport = :2049 )'` on Unraid,
+and `grep -A4 '^nfs' /etc/pve/storage.cfg` on a Proxmox node.
+
 Shares to export:
 
 | Share | For jobs |
