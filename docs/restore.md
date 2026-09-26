@@ -47,6 +47,11 @@ Restore into a new folder, check it, then swap it in. Use
 `upb restore JOB DIR` to write a full copy to a local folder on the VM
 instead.
 
+If `rsync` is missing on the VM: `apt install -y rsync`. For a remote path
+with spaces, quote the whole destination and don't add backslashes: rsync
+3.2.4 and newer (as on PBS 4) escapes remote paths itself, so a backslash
+would end up in the folder name.
+
 ## Recipes
 
 **Appdata (one container or all)**: the plugin's archives are inside the
@@ -56,7 +61,7 @@ instead.
    run you want.
 2. Copy that dated folder back into the plugin's destination on Unraid:
    ```sh
-   rsync -a /mnt/restore/<dated-folder> "root@192.168.1.180:/mnt/user/Backup/appdata\ backup/"
+   rsync -a /mnt/restore/<dated-folder> "root@192.168.1.180:/mnt/user/Backup/appdata backup/"
    ```
 3. On Unraid: Settings > Appdata Backup > Restore, pick that backup and the
    containers to restore. The plugin stops and starts them for you.
