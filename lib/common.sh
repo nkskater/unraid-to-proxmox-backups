@@ -90,12 +90,10 @@ set_config_defaults() {
   HEALTHCHECK_URL=""
 }
 
-# load_config [optional] — with "optional", a missing config file is not an error.
 load_config() {
   local conf="$UPB_CONFIG_DIR/upb.conf"
   set_config_defaults
   if [[ ! -r $conf ]]; then
-    [[ ${1:-} == optional ]] && return 0
     die "config not found: $conf (run install.sh first, or set UPB_CONFIG_DIR)"
   fi
   # shellcheck source=/dev/null
