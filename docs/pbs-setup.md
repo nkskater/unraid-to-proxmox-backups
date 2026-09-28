@@ -67,14 +67,78 @@ collection needs some free space to run.
 
 1. Proxmox VE: VM > Hardware > the datastore disk > Disk Action > Resize,
    and add the extra GB.
-2. In the PBS VM's shell (the web UI's Directory > Create put an ext4
-   partition `sdb1` on the disk):
+2. In the PBS VM's shell, find the datastore's partition, e.g. `/dev/sdb1`:
+   `findmnt -no SOURCE /mnt/datastore/unraid`. Then grow it (here for
+   `/dev/sdb1`):
    ```sh
    apt install -y cloud-guest-utils   # once, for growpart
    growpart /dev/sdb 1
    resize2fs /dev/sdb1                # works while mounted
    ```
 3. The datastore shows the new size right away.
+
+### Making the datastore disk smaller
+
+Proxmox can only grow disks. Before moving to a smaller one, check whether
+the big one really takes that space: on a ZFS pool, a disk is either *thin*
+(takes only what's written) or *thick* (reserves its full size). On the
+Proxmox node:
+
+```sh
+zfs list -t volume -o name,volsize,used,refreservation | grep vm-<vmid>-
+```
+
+- `refreservation` is `none`: the disk is thin and already takes only what
+  PBS wrote. A smaller disk saves nothing; just keep an eye on the pool.
+- `refreservation` is about the disk's size: it's thick. `zfs set
+  refreservation=none <name>` (the name from the list) gives the unused part
+  back to the pool right away, with no copying. The pool can then run full
+  before the disk does, so watch the pool's usage. To make new disks thin:
+  Datacenter > Storage > the ZFS storage > Edit > Thin provision.
+
+With thin disks, PBS's garbage collection only returns space to the pool if
+the VM trims: `systemctl enable --now fstrim.timer` in the PBS VM.
+
+To really move to a smaller disk (pick a size that keeps usage under ~60%;
+PBS is only down for a few minutes, in step 5):
+
+1. Pick a time without backups and stop the timers:
+   `systemctl stop upb-backup.timer upb-offsite.timer`. In the PBS web UI,
+   Datastore > `unraid` > Options > Maintenance mode: **Read only**.
+2. Proxmox VE: VM > Hardware > Add > Hard Disk, the new size, same storage,
+   Discard, IO thread, SSD emulation; under Advanced untick *Backup* and tick
+   *Skip replication*.
+3. PBS web UI: Administration > Storage / Disks > Directory > Create: the new
+   disk (`lsblk` shows which one), ext4, name `unraid2`, **untick** *Add as
+   Datastore*. It's mounted at `/mnt/datastore/unraid2`.
+4. Copy, then check nothing differs (the second command prints nothing):
+   ```sh
+   rsync -aHAX --numeric-ids --info=progress2 /mnt/datastore/unraid/ /mnt/datastore/unraid2/
+   rsync -aHAX --numeric-ids --dry-run --itemize-changes /mnt/datastore/unraid/ /mnt/datastore/unraid2/
+   ```
+5. Mount the new disk at `/mnt/datastore/unraid` instead of the old one:
+   ```sh
+   cp /etc/systemd/system/mnt-datastore-unraid.mount /root/mnt-datastore-unraid.mount.old
+   NEW=$(findmnt -no UUID /mnt/datastore/unraid2); echo "$NEW"
+   systemctl stop proxmox-backup-proxy proxmox-backup
+   systemctl disable --now mnt-datastore-unraid2.mount
+   rm /etc/systemd/system/mnt-datastore-unraid2.mount
+   systemctl stop mnt-datastore-unraid.mount
+   sed -i "s#^What=.*#What=/dev/disk/by-uuid/$NEW#" /etc/systemd/system/mnt-datastore-unraid.mount
+   systemctl daemon-reload
+   systemctl start mnt-datastore-unraid.mount
+   df -h /mnt/datastore/unraid        # the new size
+   systemctl start proxmox-backup proxmox-backup-proxy
+   ```
+6. Maintenance mode back to none, then Datastore > `unraid` > Content >
+   **Verify All**, `upb check` and `upb backup sftpgo`. Start the timers
+   again: `systemctl start upb-backup.timer upb-offsite.timer`.
+7. Only when the verify is OK: Proxmox VE > VM > Hardware > the old disk >
+   Detach, then select *Unused Disk* > Remove.
+
+To undo step 5 before step 7: copy `/root/mnt-datastore-unraid.mount.old`
+back to `/etc/systemd/system/mnt-datastore-unraid.mount`, then `systemctl
+daemon-reload` and restart the mount and the two PBS services.
 
 Keep the VM out of Proxmox HA, since its datastore disk is local to one
 node. If the VM or the node ever dies, attach the datastore disk to a

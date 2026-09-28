@@ -129,7 +129,7 @@ in short:
 4. Copy back the node's own settings from `/root/host-restore/etc/`,
    comparing with the fresh files first:
    - `network/interfaces` (check the network card names with `ip link`) and `hosts`
-   - `iscsi/` and any `multipath` files, for the `iscsi2` storage
+   - `iscsi/` and any `multipath` files, if you use iSCSI storage
    - `default/grub`, `kernel/cmdline`, `modprobe.d/`, `modules` for passthrough;
      then `update-initramfs -u -k all` and `proxmox-boot-tool refresh`
      (or `update-grub`)
@@ -154,7 +154,8 @@ Then `/etc/pve` has to come from the backup. Rebuilding is the safe route:
    `/etc/pve`: `storage.cfg`, `datacenter.cfg`, `user.cfg`, `jobs.cfg`
    (backup jobs), `firewall/`, and the storage passwords in `priv/storage/`.
 3. Virtual machines:
-   - Disks that survived on shared storage (e.g. iSCSI): copy the configs from
+   - Disks that survived (on the `proxmox` NFS share, or on a ZFS pool that
+     wasn't wiped: `zpool import -f <pool>`): copy the configs from
      `etc/pve/nodes/<old-node>/qemu-server/` and `lxc/` back into
      `/etc/pve/nodes/<node>/`, and the VMs are back.
    - Otherwise restore them from the PBS on Unraid (or from Google Drive, see
