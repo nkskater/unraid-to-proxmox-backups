@@ -113,6 +113,7 @@ PBS is only down for a few minutes, in step 5):
    Datastore*. It's mounted at `/mnt/datastore/unraid2`.
 4. Copy, then check nothing differs (the second command prints nothing):
    ```sh
+   apt install -y rsync               # PBS doesn't ship it
    rsync -aHAX --numeric-ids --info=progress2 /mnt/datastore/unraid/ /mnt/datastore/unraid2/
    rsync -aHAX --numeric-ids --dry-run --itemize-changes /mnt/datastore/unraid/ /mnt/datastore/unraid2/
    ```
