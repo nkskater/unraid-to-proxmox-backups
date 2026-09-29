@@ -117,7 +117,10 @@ PBS is only down for a few minutes, in step 5):
    rsync -aHAX --numeric-ids --info=progress2 /mnt/datastore/unraid/ /mnt/datastore/unraid2/
    rsync -aHAX --numeric-ids --dry-run --itemize-changes /mnt/datastore/unraid/ /mnt/datastore/unraid2/
    ```
-5. Mount the new disk at `/mnt/datastore/unraid` instead of the old one:
+5. Mount the new disk at `/mnt/datastore/unraid` instead of the old one. Run
+   this over SSH or the Proxmox VE console (VM > Console), **not** the PBS
+   web UI's Shell: that shell runs through `proxmox-backup-proxy`, so
+   stopping the proxy cuts it off halfway and leaves PBS stopped.
    ```sh
    cp /etc/systemd/system/mnt-datastore-unraid.mount /root/mnt-datastore-unraid.mount.old
    NEW=$(findmnt -no UUID /mnt/datastore/unraid2); echo "$NEW"
